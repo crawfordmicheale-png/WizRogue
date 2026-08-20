@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WizRogue — a first-person spell-casting roguelike</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🜂</text></svg>" />
+</head>
+<body>
+  <div id="game">
+    <canvas id="view" width="480" height="270"></canvas>
+
+    <div id="hud" hidden>
+      <div class="hud-top">
+        <div class="chip" id="depth">DEPTH 1</div>
+        <div class="chip ghost" id="objective"></div>
+        <div class="chip" id="kills">0 slain</div>
+      </div>
+
+      <div id="bossbar" hidden>
+        <div class="boss-name">Corridor Warden</div>
+        <div class="track"><i></i></div>
+      </div>
+
+      <div id="log"></div>
+      <div id="crosshair"><span></span><span></span><span></span><span></span></div>
+
+      <div class="hud-bottom">
+        <div id="vitals">
+          <div class="meter hp"><i></i><label>VITALITY</label><b>100</b></div>
+          <div class="meter mp"><i></i><em></em><label>MANA</label><b>100</b></div>
+        </div>
+        <div id="slots"></div>
+      </div>
+    </div>
+
+    <div id="overlay"></div>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
