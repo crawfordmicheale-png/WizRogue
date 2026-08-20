@@ -34,7 +34,15 @@ On a phone or tablet the game switches to touch controls automatically (append
 `?touch` to the URL to force them): the left half of the screen is a floating
 movement stick (push it to the edge to sprint), dragging the right half looks
 around, the big round button casts the selected spell, and tapping a loadout
-slot selects it.
+slot selects it. A left-handed layout, vibration and aim assist live in
+Settings.
+
+Gamepads work too (standard mapping): left stick moves, right stick looks,
+`A`/`RT` casts, `LB`/`RB` cycle spells, `LT`/`L3` sprints, `Start` pauses.
+
+The title screen also offers a **daily corridor** — one shared seed per UTC
+day — and remembers your deepest descent. The game is an installable PWA and
+keeps working offline once loaded.
 
 ## The run
 
@@ -80,10 +88,13 @@ all generator invariants hold
 
 ```
 index.html            shell: canvas, HUD, overlay
-styles.css            HUD and menu styling
+styles.css            HUD, touch controls and menu styling
+sw.js                 service worker: offline cache
+manifest.webmanifest  PWA install metadata
 src/
   main.js             app state machine and the frame loop
   config.js           tuning knobs
+  settings.js         persisted preferences, best-run record, daily seed
   util/rng.js         seeded mulberry32 RNG and math helpers
   world/mapgen.js     linear corridor generation, seals, lightmap
   render/
@@ -97,10 +108,12 @@ src/
     archetypes.js     starting kits
     rewards.js        post-depth boon selection
   ui/
-    input.js          keyboard, mouse, pointer lock
+    input.js          keyboard, mouse, gamepad, pointer lock
+    touch.js          virtual stick, look drag, cast button
     audio.js          WebAudio synthesis — no audio files
+    haptics.js        vibration on phones
     hud.js            live HUD
-    menus.js          title, archetype select, rewards, pause, death
+    menus.js          title, archetype select, rewards, pause, death, settings
 test/smoke.mjs        generator invariants
 ```
 
