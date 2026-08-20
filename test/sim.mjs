@@ -14,6 +14,12 @@ class FakeInput {
   constructor() { this.held = new Set(); this.lookX = 0; this.lookY = 0; }
   down(a) { return this.held.has(a); }
   pressed() { return false; }
+  moveAxes() {
+    return {
+      f: (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0),
+      s: (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0),
+    };
+  }
   consumeLook() { this.lookX = 0; this.lookY = 0; }
   consumeWheel() { return 0; }
 }

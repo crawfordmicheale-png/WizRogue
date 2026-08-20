@@ -30,6 +30,12 @@ Then open <http://localhost:8080>. Click the canvas to capture the mouse.
 | Sprint | `Shift` |
 | Pause | `Esc` |
 
+On a phone or tablet the game switches to touch controls automatically (append
+`?touch` to the URL to force them): the left half of the screen is a floating
+movement stick (push it to the edge to sprint), dragging the right half looks
+around, the big round button casts the selected spell, and tapping a loadout
+slot selects it.
+
 ## The run
 
 * **Five archetypes.** Pyromancer, Cryomancer, Stormcaller, Plaguebinder and Arcanist —

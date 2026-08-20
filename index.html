@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#07060e" />
 <title>WizRogue — a first-person spell-casting roguelike</title>
 <link rel="stylesheet" href="styles.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🜂</text></svg>" />
@@ -32,6 +34,14 @@
           <div class="meter mp"><i></i><em></em><label>MANA</label><b>100</b></div>
         </div>
         <div id="slots"></div>
+      </div>
+
+      <div id="touch" hidden>
+        <div class="tzone move"></div>
+        <div class="tzone look"></div>
+        <div id="stick"><div class="stick-base"></div><div class="stick-nub"></div></div>
+        <button id="castBtn" aria-label="Cast spell"><i class="ring"></i><span class="glyph">✦</span></button>
+        <button id="pauseBtn" aria-label="Pause">❚❚</button>
       </div>
     </div>
 

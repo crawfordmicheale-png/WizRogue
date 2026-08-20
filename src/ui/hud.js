@@ -17,6 +17,7 @@ export class Hud {
     this.signature = '';
     this.logSignature = '';
     this.slotEls = [];
+    this.onSlotTap = null;
   }
 
   show(on) { this.el.hidden = !on; }
@@ -38,6 +39,9 @@ export class Hud {
         <span class="name">${spell ? spell.name : (unlocked ? 'empty' : 'locked')}</span>
         <span class="cost">${stats ? (stats.cost > 0 ? stats.cost : '—') : ''}${entry && entry.rank > 1 ? ` · r${entry.rank}` : ''}</span>
         <i class="cd" style="transform:scaleY(0)"></i>`;
+      if (unlocked && entry) {
+        div.addEventListener('pointerdown', (e) => { e.preventDefault(); this.onSlotTap?.(i); });
+      }
       this.slots.appendChild(div);
       this.slotEls.push({ div, cd: div.querySelector('.cd') });
     }
@@ -52,6 +56,7 @@ export class Hud {
     this.kills.textContent = `${game.runKills} slain`;
 
     const hpPct = Math.max(0, p.health / p.maxHealth);
+    this.hp.classList.toggle('low', hpPct < 0.3);
     this.hp.querySelector('i').style.transform = `scaleX(${hpPct})`;
     this.hp.querySelector('b').textContent = Math.max(0, Math.ceil(p.health));
     const mpPct = Math.max(0, p.mana / p.maxMana);
@@ -97,6 +102,12 @@ export class Hud {
       this.log.innerHTML = game.log
         .map((l) => `<div style="color:${l.color}">${l.text}</div>`)
         .join('');
+    }
+    // Old lines drift away instead of hanging around forever.
+    const kids = this.log.children;
+    for (let i = 0; i < kids.length && i < game.log.length; i++) {
+      const age = game.time - game.log[i].t;
+      kids[i].style.opacity = age < 6 ? '' : String(Math.max(0, 0.92 * (1 - (age - 6) / 3)));
     }
   }
 }

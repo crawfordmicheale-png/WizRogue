@@ -3,6 +3,7 @@ import { Renderer } from './render/raycaster.js';
 import { Game } from './game/game.js';
 import { rollRewards } from './game/rewards.js';
 import { Input } from './ui/input.js';
+import { TouchControls } from './ui/touch.js';
 import { Audio } from './ui/audio.js';
 import { Hud } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
@@ -24,8 +25,16 @@ class App {
       onDeath: (stats) => this.showDeath(stats),
     });
 
+    this.touchUI = new TouchControls(document, this.input, { onPause: () => this.pause() });
+    if (this.input.touch) document.body.classList.add('touch');
+    this.input.onTouchMode = () => {
+      document.body.classList.add('touch');
+      this.touchUI.show(this.mode === 'playing');
+    };
+
     this.input.onEscape = () => this.togglePause();
     this.input.onPause = () => { if (this.mode === 'playing') this.pause(); };
+    this.hud.onSlotTap = (i) => { if (this.mode === 'playing') this.input.pressSlot(i); };
     this.canvas.addEventListener('click', () => {
       if (this.mode === 'playing') this.input.requestLock();
     });
@@ -64,6 +73,7 @@ class App {
     this.game.state = 'playing';
     this.menus.hide();
     this.hud.show(true);
+    this.touchUI.show(true);
     this.input.requestLock();
     this.last = performance.now();
   }
@@ -119,6 +129,7 @@ class App {
       this.input.keyboardTurn(dt);
       this.game.update(dt, this.input);
       this.hud.update(this.game);
+      if (this.input.touch) this.touchUI.sync(this.game);
     }
     this.input.endFrame();
 
