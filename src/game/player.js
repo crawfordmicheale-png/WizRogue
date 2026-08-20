@@ -111,7 +111,7 @@ export class Player {
 
   update(dt, input, level) {
     if (this.invuln > 0) this.invuln -= dt;
-    if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * 1.6);
+    if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.4);
     if (this.castFlash > 0) this.castFlash = Math.max(0, this.castFlash - dt * 5);
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 2.2);
     if (this.shieldTime > 0) {

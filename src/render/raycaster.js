@@ -244,16 +244,21 @@ export class Renderer {
       ctx.fillRect(0, 0, w, h);
     }
     if (p.hurtFlash > 0) {
-      const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h * 0.85);
+      // Edge-hugging, so a hit reads as damage without blinding the player.
+      const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.5, w / 2, h / 2, h * 1.05);
       g.addColorStop(0, 'rgba(150,0,20,0)');
-      g.addColorStop(1, `rgba(190,10,30,${Math.min(0.75, p.hurtFlash)})`);
+      g.addColorStop(0.6, `rgba(175,10,30,${Math.min(0.4, p.hurtFlash * 0.45)})`);
+      g.addColorStop(1, `rgba(200,15,35,${Math.min(0.72, p.hurtFlash * 0.85)})`);
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, w, h);
     }
     const lowHp = 1 - p.health / p.maxHealth;
     if (lowHp > 0.65) {
       const pulse = (Math.sin(time * 4) * 0.5 + 0.5) * (lowHp - 0.65) * 1.4;
-      ctx.fillStyle = `rgba(120,0,20,${pulse * 0.4})`;
+      const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.35, w / 2, h / 2, h * 1.0);
+      g.addColorStop(0, 'rgba(120,0,20,0)');
+      g.addColorStop(1, `rgba(130,0,22,${Math.min(0.6, pulse * 0.85)})`);
+      ctx.fillStyle = g;
       ctx.fillRect(0, 0, w, h);
     }
     if (!this.vignette) {

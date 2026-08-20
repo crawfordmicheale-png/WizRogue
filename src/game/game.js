@@ -45,6 +45,10 @@ export class Game {
     this.state = 'playing';
     this.portalReady = true;
     this.pushLog(`Depth ${this.depth}`, '#9fd8ff');
+    if (this.depth === 1) {
+      this.pushLog('Click or Space to cast · 1-5 to switch', '#9d94c4');
+      this.pushLog('Follow the corridor to the portal', '#9d94c4');
+    }
     if (gained > 0) this.pushLog(`Loadout slot ${this.player.unlocked} unlocked`, '#ffd76a');
     this.hooks.onDepth?.(this.depth);
   }
@@ -88,6 +92,7 @@ export class Game {
     for (let i = 0; i < 5; i++) if (input.pressed(`slot${i + 1}`)) p.select(i);
     const wheel = input.consumeWheel();
     if (wheel) p.cycle(wheel > 0 ? 1 : -1);
+    if (input.pressed('altCast')) p.cycle(1);   // right click steps to the next spell
     if (input.down('cast')) this.tryCast(p.selected);
   }
 
