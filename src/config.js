@@ -8,6 +8,21 @@ export const RENDER = {
   fog: [10, 9, 20],
 };
 
+// Every five depths the corridor changes character: a per-channel light tint
+// over the whole scene plus its own fog colour. Cheap (the renderer already
+// multiplies each channel by the light term) but reads as a new region.
+export const BIOMES = [
+  { name: 'the Catacombs',    tint: [1, 1, 1],          fog: [10, 9, 20] },
+  { name: 'the Rust Vaults',  tint: [1.18, 0.94, 0.74], fog: [24, 12, 7] },
+  { name: 'the Frozen Reach', tint: [0.8, 0.98, 1.24],  fog: [7, 13, 26] },
+  { name: 'the Living Rot',   tint: [0.84, 1.12, 0.8],  fog: [9, 18, 9] },
+  { name: 'the Void Beneath', tint: [1.02, 0.8, 1.22],  fog: [16, 6, 24] },
+];
+
+export function biomeForDepth(depth) {
+  return BIOMES[Math.floor((depth - 1) / 5) % BIOMES.length];
+}
+
 export const PLAYER = {
   radius: 0.26,
   eye: 0.55,

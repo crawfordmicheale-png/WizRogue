@@ -43,17 +43,26 @@ export class Renderer {
     const horizon = h * 0.5 + p.pitch * h + p.bob + shake;
     this.cam = { dirX, dirY, planeX, planeY, horizon };
 
+    // Biome grading: the whole scene multiplies through the region's tint and
+    // fades into the region's fog, so each depth band has its own cast.
+    const biome = game.biome;
+    this.fogC = biome ? biome.fog : FOG;
+    this.tint = biome ? biome.tint : [1, 1, 1];
+
     this.drawFloorAndCeiling(level, p, dirX, dirY, planeX, planeY, horizon);
     this.drawWalls(level, p, dirX, dirY, planeX, planeY, horizon, time);
     this.drawSprites(game, p, dirX, dirY, planeX, planeY, horizon, time);
 
     this.ctx.putImageData(this.image, 0, 0);
     this.drawFloaters(game);
+    this.drawHealthBars(game);
     this.drawOverlay(game, time);
   }
 
   drawFloorAndCeiling(level, p, dirX, dirY, planeX, planeY, horizon) {
     const { w, h, buf } = this;
+    const FOG = this.fogC;
+    const [t0, t1, t2] = this.tint;
     const floor = this.tex.floor, ceil = this.tex.ceiling;
     const S = floor.size;
     const rx0 = dirX - planeX, ry0 = dirY - planeY;
@@ -89,9 +98,9 @@ export class Renderer {
         const tY = ((fy - cy) * S) & (S - 1);
         const c = tex.pix[tY * S + tX];
         const lit = level.lightAt(cx, cy) * f * (isFloor ? 1 : 0.88);
-        const r = ((c & 255) * lit + FOG[0] * fogT * 0.45) | 0;
-        const g = (((c >> 8) & 255) * lit + FOG[1] * fogT * 0.45) | 0;
-        const b = (((c >> 16) & 255) * lit + FOG[2] * fogT * 0.45) | 0;
+        const r = ((c & 255) * lit * t0 + FOG[0] * fogT * 0.45) | 0;
+        const g = (((c >> 8) & 255) * lit * t1 + FOG[1] * fogT * 0.45) | 0;
+        const b = (((c >> 16) & 255) * lit * t2 + FOG[2] * fogT * 0.45) | 0;
         buf[rowBase + x] = (255 << 24) | (b << 16) | (g << 8) | r;
         fx += stepX; fy += stepY;
       }
@@ -100,6 +109,8 @@ export class Renderer {
 
   drawWalls(level, p, dirX, dirY, planeX, planeY, horizon, time) {
     const { w, h, buf, zbuf } = this;
+    const FOG = this.fogC;
+    const [t0, t1, t2] = this.tint;
     const barrierFrame = this.tex.barrier[Math.floor(time * 9) % this.tex.barrier.length];
 
     for (let x = 0; x < w; x++) {
@@ -149,6 +160,7 @@ export class Renderer {
       const fogT = perp / RENDER.viewDistance;
       const f = 1 - fogT * fogT;
       const lit = lit0 * f * (side === 1 ? 0.72 : 1);
+      const litR = lit * t0, litG = lit * t1, litB = lit * t2;
       const fr = FOG[0] * fogT * 0.45, fg = FOG[1] * fogT * 0.45, fb = FOG[2] * fogT * 0.45;
 
       for (let y = y0; y <= y1; y++) {
@@ -158,9 +170,9 @@ export class Renderer {
         const c = tex.pix[i];
         const e = tex.emis[i] / 255 * f;
         const cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
-        const r = Math.min(255, cr * lit + cr * e + fr) | 0;
-        const g = Math.min(255, cg * lit + cg * e + fg) | 0;
-        const b = Math.min(255, cb * lit + cb * e + fb) | 0;
+        const r = Math.min(255, cr * litR + cr * e + fr) | 0;
+        const g = Math.min(255, cg * litG + cg * e + fg) | 0;
+        const b = Math.min(255, cb * litB + cb * e + fb) | 0;
         buf[y * w + x] = (255 << 24) | (b << 16) | (g << 8) | r;
       }
     }
@@ -275,6 +287,41 @@ export class Renderer {
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = 'start';
+  }
+
+  // A sliver of health floats over any enemy hurt in the last moment or two.
+  // Bosses are exempt — they own the big bar at the top of the screen.
+  drawHealthBars(game) {
+    const enemies = game.enemies;
+    if (!enemies || !enemies.length) return;
+    const { w, h, ctx, cam, zbuf } = this;
+    const p = game.player;
+    const invDet = 1 / (cam.planeX * cam.dirY - cam.dirX * cam.planeY);
+
+    for (const e of enemies) {
+      if (e.dead || e.type.boss || e.hpBarTime <= 0 || e.hp >= e.maxHp) continue;
+      const sx = e.x - p.x, sy = e.y - p.y;
+      const tx = invDet * (cam.dirY * sx - cam.dirX * sy);
+      const ty = invDet * (-cam.planeY * sx + cam.planeX * sy);
+      if (ty <= 0.3 || ty > RENDER.viewDistance * 0.7) continue;
+
+      const scale = h / ty;
+      const screenX = (w / 2) * (1 + tx / ty);
+      const screenY = cam.horizon + (0.5 - (e.z + e.height * 0.62)) * scale;
+      if (screenX < -30 || screenX > w + 30 || screenY < -8 || screenY > h + 8) continue;
+      const col = Math.max(0, Math.min(w - 1, Math.round(screenX)));
+      if (ty >= zbuf[col] + 0.4) continue; // behind a wall
+
+      const bw = clamp(scale * e.radius * 1.7, 12, 44);
+      const bh = Math.max(2, Math.round(scale * 0.02) + 2);
+      const frac = Math.max(0, e.hp / e.maxHp);
+      ctx.globalAlpha = Math.min(1, e.hpBarTime / 0.4) * 0.9;
+      ctx.fillStyle = 'rgba(6,4,14,0.85)';
+      ctx.fillRect(screenX - bw / 2 - 1, screenY - 1, bw + 2, bh + 2);
+      ctx.fillStyle = e.elite ? '#ffd76a' : (frac > 0.45 ? '#8affc4' : '#ff5a78');
+      ctx.fillRect(screenX - bw / 2, screenY, bw * frac, bh);
+    }
+    ctx.globalAlpha = 1;
   }
 
   // Hands, flashes and vignette are cheaper to draw with the 2D context.

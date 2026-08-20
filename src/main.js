@@ -7,7 +7,10 @@ import { TouchControls } from './ui/touch.js';
 import { Audio } from './ui/audio.js';
 import { Hud } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
-import { settings, loadSettings, loadBest, recordRun, dailySeed } from './settings.js';
+import {
+  settings, loadSettings, saveSettings, loadBest, recordRun, dailySeed,
+  loadRunState, saveRunState, clearRunState,
+} from './settings.js';
 
 class App {
   constructor() {
@@ -25,9 +28,12 @@ class App {
     this.pendingSeed = null;   // set when a daily run was requested
     this.dailyLabel = null;
 
+    this.audio.musicOn = settings.music;
+
     this.game = new Game(this.tex, this.audio, {
       onLevelClear: () => this.showRewards(),
       onDeath: (stats) => this.showDeath(stats),
+      onDepth: () => this.persistRun(),
     });
 
     this.touchUI = new TouchControls(document, this.input, { onPause: () => this.pause() });
@@ -64,8 +70,14 @@ class App {
     this.mode = 'title';
     this.hud.show(false);
     this.input.releaseLock();
+    const savedRun = loadRunState();
     this.menus.title({
       best: loadBest(),
+      savedRun,
+      onContinue: savedRun ? () => {
+        this.audio.ensure();
+        this.continueRun(savedRun);
+      } : null,
       onStart: () => {
         this.audio.ensure();
         this.pendingSeed = null;
@@ -87,6 +99,12 @@ class App {
     this.menus.settingsMenu({
       muted: this.audio.muted,
       onToggleMute: () => { this.audio.setMuted(!this.audio.muted); return this.audio.muted; },
+      onToggleMusic: () => {
+        settings.music = !settings.music;
+        saveSettings();
+        this.audio.setMusicEnabled(settings.music);
+        return settings.music;
+      },
       touch: this.input.touch,
       onBack,
     });
@@ -103,6 +121,38 @@ class App {
     else this.game.startRun(archetypeId);
     this.enterImmersion();
     this.resume();
+  }
+
+  continueRun(save) {
+    this.pendingSeed = null;
+    this.dailyLabel = save.dailyLabel || null;
+    this.game.restoreRun(save);
+    // The snapshot written during restore captured a fresh player; overwrite it
+    // now that the saved stats and loadout are back in place.
+    this.persistRun();
+    this.enterImmersion();
+    this.resume();
+  }
+
+  // Written at the top of every depth: enough to resume this run from the
+  // start of the current floor after a closed tab or a crash.
+  persistRun() {
+    const g = this.game;
+    const p = g.player;
+    saveRunState({
+      seed: g.seed,
+      depth: g.depth,
+      runKills: g.runKills,
+      runTime: Math.round(g.runTime),
+      archetypeId: g.archetype.id,
+      dailyLabel: this.dailyLabel,
+      player: {
+        maxHealth: p.maxHealth, health: Math.ceil(p.health),
+        maxMana: p.maxMana, mana: Math.ceil(p.mana),
+        regen: p.regen, speedMul: p.speedMul, kills: p.kills,
+        mods: p.mods, slots: p.slots,
+      },
+    });
   }
 
   // Fullscreen + landscape are best-effort: browsers that refuse just play inline.
@@ -135,7 +185,7 @@ class App {
   renderPauseMenu() {
     this.menus.pause({
       onResume: () => this.resume(),
-      onAbandon: () => this.showTitle(),
+      onAbandon: () => { clearRunState(); this.showTitle(); },
       onSettings: () => this.showSettings(() => this.renderPauseMenu()),
       muted: this.audio.muted,
       onToggleMute: () => { this.audio.setMuted(!this.audio.muted); return this.audio.muted; },
@@ -171,6 +221,7 @@ class App {
     this.mode = 'dead';
     this.hud.show(false);
     this.input.releaseLock();
+    clearRunState();
     const isRecord = recordRun(stats);
     this.menus.death(stats, this.game.player, {
       isRecord,
@@ -194,6 +245,19 @@ class App {
       if (this.input.touch) this.touchUI.sync(this.game);
     }
     this.input.endFrame();
+
+    // Feed the music scheduler and the spatial-audio listener.
+    if (this.audio.ctx) {
+      let scene = 'calm';
+      if (this.mode === 'playing') {
+        const g = this.game;
+        const boss = g.enemies.some((e) => e.type.boss && e.awake && !e.dead);
+        const live = g.level.encounters.some((e) => e.triggered && !e.cleared);
+        scene = boss ? 'boss' : live ? 'combat' : 'explore';
+        this.audio.updateListener(g.player.x, g.player.y, g.player.angle);
+      }
+      this.audio.setScene(scene, this.game.depth || 1);
+    }
 
     if (this.game.level) this.renderer.render(this.game, now / 1000);
     requestAnimationFrame((t) => this.frame(t));
