@@ -1,0 +1,739 @@
+import { generateLevel } from '../world/mapgen.js';
+import { Player } from './player.js';
+import { Enemy, collides } from './enemies.js';
+import { SPELLS, spellStats, schoolColor } from './spells.js';
+import { getArchetype } from './archetypes.js';
+import { clamp, angleDelta } from '../util/rng.js';
+import { PLAYER } from '../config.js';
+
+const SPRITE_SCALE = 1.7;
+
+export class Game {
+  constructor(tex, audio, hooks = {}) {
+    this.tex = tex;
+    this.audio = audio;
+    this.hooks = hooks;
+    this.state = 'idle';
+    this.time = 0;
+    this.log = [];
+  }
+
+  // --- run lifecycle ------------------------------------------------------
+
+  startRun(archetypeId, seed = (Math.random() * 1e9) | 0) {
+    this.seed = seed >>> 0;
+    this.archetype = getArchetype(archetypeId);
+    this.player = new Player(this.archetype);
+    this.depth = 0;
+    this.runKills = 0;
+    this.runTime = 0;
+    this.log.length = 0;
+    this.nextDepth();
+  }
+
+  nextDepth() {
+    this.depth++;
+    const gained = this.player.unlockSlotsFor(this.depth);
+    this.level = generateLevel((this.seed + this.depth * 7919) >>> 0, this.depth);
+    this.enemies = [];
+    this.projectiles = [];
+    this.particles = [];
+    this.beams = [];
+    this.player.placeAt(this.level.spawn);
+    this.player.shake = 0;
+    for (const w of this.level.wanderers) this.spawn(w.id, w.x, w.y, null);
+    this.state = 'playing';
+    this.portalReady = true;
+    this.pushLog(`Depth ${this.depth}`, '#9fd8ff');
+    if (this.depth === 1) {
+      this.pushLog('Click or Space to cast · 1-5 to switch', '#9d94c4');
+      this.pushLog('Follow the corridor to the portal', '#9d94c4');
+    }
+    if (gained > 0) this.pushLog(`Loadout slot ${this.player.unlocked} unlocked`, '#ffd76a');
+    this.hooks.onDepth?.(this.depth);
+  }
+
+  spawn(typeId, x, y, encounter) {
+    const e = new Enemy(typeId, x, y, this.depth);
+    e.encounter = encounter;
+    this.enemies.push(e);
+    return e;
+  }
+
+  pushLog(text, color = '#dcd6ff') {
+    this.log.push({ text, color, t: this.time });
+    if (this.log.length > 5) this.log.shift();
+  }
+
+  // --- simulation ---------------------------------------------------------
+
+  update(dt, input) {
+    if (this.state !== 'playing') return;
+    this.time += dt;
+    this.runTime += dt;
+    const p = this.player;
+
+    p.update(dt, input, this.level);
+    this.handleInput(input);
+    this.updateEncounters();
+
+    for (const e of this.enemies) e.update(dt, this);
+    this.updateProjectiles(dt);
+    this.updateParticles(dt);
+    this.updatePickups();
+    this.enemies = this.enemies.filter((e) => !e.dead);
+
+    if (p.health <= 0) this.die();
+    else this.checkPortal();
+  }
+
+  handleInput(input) {
+    const p = this.player;
+    for (let i = 0; i < 5; i++) if (input.pressed(`slot${i + 1}`)) p.select(i);
+    const wheel = input.consumeWheel();
+    if (wheel) p.cycle(wheel > 0 ? 1 : -1);
+    if (input.pressed('altCast')) p.cycle(1);   // right click steps to the next spell
+    if (input.down('cast')) this.tryCast(p.selected);
+  }
+
+  updateEncounters() {
+    const p = this.player;
+    for (const enc of this.level.encounters) {
+      if (enc.cleared) continue;
+      if (!enc.triggered) {
+        const b = enc.bounds;
+        if (p.x > b.x0 && p.x < b.x1 + 1 && p.y > b.y0 && p.y < b.y1 + 1) this.triggerEncounter(enc);
+        continue;
+      }
+      const alive = this.enemies.some((e) => e.encounter === enc && !e.dead);
+      if (!alive) this.clearEncounter(enc);
+    }
+  }
+
+  triggerEncounter(enc) {
+    if (enc.triggered) return;
+    enc.triggered = true;
+    enc.spawns.forEach((s, i) => {
+      const e = this.spawn(s.id, s.x, s.y, enc);
+      e.readyIn = i * 0.35 + Math.random() * 0.4;
+    });
+    for (const seal of enc.seals) {
+      const b = this.level.barriers.get(`${seal.x},${seal.y}`);
+      if (b && !b.open) b.active = true;
+    }
+    this.audio?.play(enc.kind === 'boss' ? 'boss' : 'seal');
+    this.pushLog(enc.kind === 'boss' ? 'The Warden stirs' : 'The way seals behind you', '#ff9a6a');
+    this.hooks.onEncounter?.(enc);
+  }
+
+  clearEncounter(enc) {
+    enc.cleared = true;
+    for (const seal of enc.seals) {
+      const b = this.level.barriers.get(`${seal.x},${seal.y}`);
+      if (b) { b.active = false; b.open = true; }
+    }
+    this.audio?.play('unseal');
+    this.pushLog('The seals fall away', '#8affc4');
+  }
+
+  checkPortal() {
+    const bossLive = this.level.encounters.some((e) => e.kind === 'boss' && !e.cleared);
+    const d = Math.hypot(this.player.x - this.level.portal.x, this.player.y - this.level.portal.y);
+    this.portalReady = !bossLive;
+    if (!bossLive && d < 0.85) {
+      this.state = 'reward';
+      this.audio?.play('portal');
+      this.hooks.onLevelClear?.(this.depth);
+    }
+  }
+
+  die() {
+    this.state = 'dead';
+    this.audio?.play('death');
+    this.hooks.onDeath?.({
+      depth: this.depth,
+      kills: this.runKills,
+      time: this.runTime,
+      archetype: this.archetype.name,
+      seed: this.seed,
+    });
+  }
+
+  // --- casting ------------------------------------------------------------
+
+  selectedColor() {
+    const s = this.player.slots[this.player.selected];
+    return s ? schoolColor(s.id) : [200, 200, 220];
+  }
+
+  tryCast(slot) {
+    const p = this.player;
+    const entry = p.slots[slot];
+    if (!entry) return false;
+    if (p.cooldowns[slot] > 0) return false;
+    const s = spellStats(entry.id, entry.rank, p.mods);
+    if (p.mana < s.cost) {
+      if (this.time - (this.lastDryNote || -1) > 0.6) {
+        this.lastDryNote = this.time;
+        this.audio?.play('fizzle');
+      }
+      return false;
+    }
+    p.mana -= s.cost;
+    p.cooldowns[slot] = s.cd;
+    p.castFlash = 1;
+    p.castColor = schoolColor(entry.id);
+
+    switch (s.kind) {
+      case 'bolt': this.castBolt(s); break;
+      case 'beam': this.castBeam(s); break;
+      case 'nova': this.castNova(s); break;
+      case 'cone': this.castCone(s); break;
+      case 'self': this.castSelf(s); break;
+    }
+    this.audio?.castSound(s);
+    return true;
+  }
+
+  muzzle() {
+    const p = this.player;
+    return {
+      x: p.x + Math.cos(p.angle) * 0.35,
+      y: p.y + Math.sin(p.angle) * 0.35,
+      z: 0.45,
+    };
+  }
+
+  castBolt(s) {
+    const p = this.player;
+    const m = this.muzzle();
+    this.projectiles.push({
+      x: m.x, y: m.y, z: m.z,
+      vx: Math.cos(p.angle) * s.speed,
+      vy: Math.sin(p.angle) * s.speed,
+      r: s.radius, spell: s, friendly: true,
+      life: 4, pierce: s.pierce || 0, hitIds: new Set(),
+      color: schoolColor(s.id), size: 0.34 + (s.blast ? 0.16 : 0),
+      trail: 0,
+    });
+  }
+
+  castBeam(s) {
+    const p = this.player;
+    const origin = this.muzzle();
+    const color = schoolColor(s.id);
+    let from = origin;
+    let target = this.rayPickEnemy(from.x, from.y, Math.cos(p.angle), Math.sin(p.angle), s.range);
+    const hits = new Set();
+    let power = 1;
+    let jumps = (s.chains || 0) + 1;
+
+    if (!target) {
+      const end = this.rayWallHit(from.x, from.y, Math.cos(p.angle), Math.sin(p.angle), s.range);
+      this.spawnBeam(from, end, color);
+      return;
+    }
+    while (target && jumps-- > 0) {
+      this.spawnBeam(from, { x: target.x, y: target.y, z: target.z }, color);
+      const dealt = target.damage(s.dmg * power, this, { color });
+      target.applyStatus(s);
+      if (s.leech) this.player.heal(dealt * (s.leech + this.player.mods.leechBonus));
+      if (s.manaGain) this.player.restore(s.manaGain);
+      hits.add(target.id);
+      from = { x: target.x, y: target.y, z: target.z };
+      power *= s.chainFalloff || 1;
+      target = s.chains ? this.nearestEnemy(from.x, from.y, s.chainRange, hits) : null;
+    }
+  }
+
+  castNova(s) {
+    const p = this.player;
+    const color = schoolColor(s.id);
+    this.spawnRing(p.x, p.y, 0.5, s.range, color);
+    this.player.shake = Math.min(1, this.player.shake + 0.35);
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      if (d > s.range + e.radius) continue;
+      if (!this.hasLineOfSight(p.x, p.y, e.x, e.y)) continue;
+      e.damage(s.dmg * (1 - 0.35 * (d / s.range)), this, { color });
+      e.applyStatus(s);
+      if (s.knock) e.knockback(e.x - p.x, e.y - p.y, s.knock);
+    }
+  }
+
+  castCone(s) {
+    const p = this.player;
+    const color = schoolColor(s.id);
+    for (let i = 0; i < 26; i++) {
+      const a = p.angle + (Math.random() - 0.5) * s.arc;
+      const reach = Math.random() * s.range;
+      this.particles.push({
+        x: p.x + Math.cos(a) * 0.4, y: p.y + Math.sin(a) * 0.4, z: 0.45,
+        vx: Math.cos(a) * (s.range * 1.4), vy: Math.sin(a) * (s.range * 1.4), vz: (Math.random() - 0.5) * 0.5,
+        life: 0.18 + reach / s.range * 0.22, maxLife: 0.4,
+        color, size: 0.5, additive: true,
+      });
+    }
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const dx = e.x - p.x, dy = e.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d > s.range + e.radius) continue;
+      if (Math.abs(angleDelta(p.angle, Math.atan2(dy, dx))) > s.arc / 2 + e.radius / Math.max(1, d)) continue;
+      if (!this.hasLineOfSight(p.x, p.y, e.x, e.y)) continue;
+      const dealt = e.damage(s.dmg, this, { color });
+      e.applyStatus(s);
+      if (s.leech) this.player.heal(dealt * (s.leech + this.player.mods.leechBonus));
+      if (s.knock) e.knockback(dx, dy, s.knock);
+    }
+  }
+
+  castSelf(s) {
+    const p = this.player;
+    if (s.effect === 'heal') {
+      p.heal(s.heal);
+      this.pushLog(`+${s.heal} vitality`, '#8affc4');
+      this.spawnRing(p.x, p.y, 0.3, 1.4, [120, 255, 200]);
+    } else if (s.effect === 'shield') {
+      p.shield = s.shield;
+      p.shieldTime = s.time;
+      this.spawnRing(p.x, p.y, 0.3, 1.2, [120, 255, 220]);
+      this.pushLog(`Ward: ${s.shield}`, '#78ffdc');
+    } else if (s.effect === 'blink') {
+      const steps = 24;
+      const dx = Math.cos(p.angle) * (s.distance / steps);
+      const dy = Math.sin(p.angle) * (s.distance / steps);
+      let nx = p.x, ny = p.y;
+      for (let i = 0; i < steps; i++) {
+        const tx = nx + dx, ty = ny + dy;
+        if (collides(this.level, tx, ty, p.radius)) break;
+        nx = tx; ny = ty;
+      }
+      this.spawnRing(p.x, p.y, 0.2, 0.9, [140, 255, 235]);
+      p.x = nx; p.y = ny;
+      this.spawnRing(nx, ny, 0.2, 0.9, [140, 255, 235]);
+    }
+  }
+
+  // --- projectiles --------------------------------------------------------
+
+  spawnEnemyProjectile(enemy, angle, r) {
+    // Keep the muzzle inside the gap to the player, or a close-range shot
+    // would spawn on the far side of its target and sail away.
+    const gap = Math.hypot(this.player.x - enemy.x, this.player.y - enemy.y);
+    const off = Math.min(0.4, Math.max(0.05, gap * 0.4));
+    this.projectiles.push({
+      x: enemy.x + Math.cos(angle) * off,
+      y: enemy.y + Math.sin(angle) * off,
+      z: enemy.z,
+      vx: Math.cos(angle) * r.speed,
+      vy: Math.sin(angle) * r.speed,
+      r: 0.22, dmg: r.dmg * enemy.type.dmgMul, friendly: false,
+      life: 5, color: r.color || [255, 120, 120], size: 0.3,
+      homing: r.homing || 0,
+    });
+    this.audio?.play('enemyShot');
+  }
+
+  updateProjectiles(dt) {
+    const p = this.player;
+    const out = [];
+    for (const b of this.projectiles) {
+      b.life -= dt;
+      if (b.life <= 0) continue;
+
+      const spell = b.spell;
+      if (b.friendly && spell && spell.homing) {
+        const target = this.nearestEnemyInCone(b.x, b.y, Math.atan2(b.vy, b.vx), 9, 1.2);
+        if (target) {
+          const want = Math.atan2(target.y - b.y, target.x - b.x);
+          const cur = Math.atan2(b.vy, b.vx);
+          const na = cur + clamp(angleDelta(cur, want), -spell.homing * dt, spell.homing * dt);
+          const sp = Math.hypot(b.vx, b.vy);
+          b.vx = Math.cos(na) * sp; b.vy = Math.sin(na) * sp;
+        }
+      } else if (!b.friendly && b.homing) {
+        const want = Math.atan2(p.y - b.y, p.x - b.x);
+        const cur = Math.atan2(b.vy, b.vx);
+        const na = cur + clamp(angleDelta(cur, want), -b.homing * dt, b.homing * dt);
+        const sp = Math.hypot(b.vx, b.vy);
+        b.vx = Math.cos(na) * sp; b.vy = Math.sin(na) * sp;
+      }
+
+      // Substep so fast bolts cannot tunnel through a wall or a body.
+      const speed = Math.hypot(b.vx, b.vy);
+      const steps = Math.max(1, Math.ceil((speed * dt) / 0.2));
+      const sdt = dt / steps;
+      let alive = true;
+      for (let i = 0; i < steps && alive; i++) {
+        b.x += b.vx * sdt;
+        b.y += b.vy * sdt;
+        if (this.level.solid(Math.floor(b.x), Math.floor(b.y))) { this.impact(b, null); alive = false; break; }
+        if (b.friendly) {
+          for (const e of this.enemies) {
+            if (e.dead || (b.hitIds && b.hitIds.has(e.id))) continue;
+            if (Math.hypot(e.x - b.x, e.y - b.y) > e.radius + b.r) continue;
+            this.impact(b, e);
+            if (b.pierce > 0) { b.pierce--; b.hitIds.add(e.id); }
+            else alive = false;
+            break;
+          }
+        } else if (Math.hypot(p.x - b.x, p.y - b.y) < p.radius + b.r) {
+          this.damagePlayer(b.dmg, null);
+          this.impact(b, null);
+          alive = false;
+        }
+      }
+      b.trail = (b.trail || 0) + dt;
+      if (b.trail > 0.02) {
+        b.trail = 0;
+        this.particles.push({
+          x: b.x, y: b.y, z: b.z, vx: 0, vy: 0, vz: 0,
+          life: 0.22, maxLife: 0.22, color: b.color, size: b.size * 0.7, additive: true,
+        });
+      }
+      if (alive) out.push(b);
+    }
+    this.projectiles = out;
+  }
+
+  impact(b, enemy) {
+    const spell = b.spell;
+    const color = b.color;
+    if (enemy && spell) {
+      const dealt = enemy.damage(spell.dmg, this, { color });
+      enemy.applyStatus(spell);
+      if (spell.leech) this.player.heal(dealt * (spell.leech + this.player.mods.leechBonus));
+      if (spell.knock) enemy.knockback(b.vx, b.vy, spell.knock);
+    }
+    if (spell && spell.blast) {
+      this.explode(b.x, b.y, spell, color, enemy);
+      this.audio?.play('boom');
+    } else {
+      this.spawnHitBurst(b.x, b.y, b.z, color, 7);
+      this.audio?.play(b.friendly ? 'impact' : 'playerHit');
+    }
+  }
+
+  explode(x, y, spell, color, skip) {
+    this.spawnRing(x, y, 0.3, spell.blast, color);
+    const p = this.player;
+    if (Math.hypot(p.x - x, p.y - y) < spell.blast * 0.8) p.shake = Math.min(1.2, p.shake + 0.4);
+    for (const e of this.enemies) {
+      if (e.dead || e === skip) continue;
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d > spell.blast + e.radius) continue;
+      const falloff = 1 - d / (spell.blast + e.radius);
+      e.damage(spell.blastDmg * falloff, this, { color });
+      e.applyStatus(spell);
+      if (spell.knock) e.knockback(e.x - x, e.y - y, spell.knock * falloff);
+      if (spell.pull) e.knockback(x - e.x, y - e.y, spell.pull * falloff);
+    }
+  }
+
+  // --- queries ------------------------------------------------------------
+
+  hasLineOfSight(x0, y0, x1, y1) {
+    const dx = x1 - x0, dy = y1 - y0;
+    const dist = Math.hypot(dx, dy);
+    const steps = Math.ceil(dist / 0.25);
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      if (this.level.solid(Math.floor(x0 + dx * t), Math.floor(y0 + dy * t))) return false;
+    }
+    return true;
+  }
+
+  rayWallHit(x, y, dx, dy, range) {
+    const steps = Math.ceil(range / 0.1);
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * range;
+      const px = x + dx * t, py = y + dy * t;
+      if (this.level.solid(Math.floor(px), Math.floor(py))) return { x: x + dx * (t - 0.12), y: y + dy * (t - 0.12), z: 0.5 };
+    }
+    return { x: x + dx * range, y: y + dy * range, z: 0.5 };
+  }
+
+  rayPickEnemy(x, y, dx, dy, range) {
+    let best = null, bestT = Infinity;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const ex = e.x - x, ey = e.y - y;
+      const t = ex * dx + ey * dy;
+      if (t < 0 || t > range) continue;
+      const perp = Math.abs(ex * dy - ey * dx);
+      if (perp > e.radius + 0.3) continue;
+      if (t < bestT && this.hasLineOfSight(x, y, e.x, e.y)) { best = e; bestT = t; }
+    }
+    return best;
+  }
+
+  nearestEnemy(x, y, range, exclude) {
+    let best = null, bestD = range;
+    for (const e of this.enemies) {
+      if (e.dead || (exclude && exclude.has(e.id))) continue;
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d < bestD && this.hasLineOfSight(x, y, e.x, e.y)) { best = e; bestD = d; }
+    }
+    return best;
+  }
+
+  nearestEnemyInCone(x, y, angle, range, arc) {
+    let best = null, bestD = range;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d > bestD) continue;
+      if (Math.abs(angleDelta(angle, Math.atan2(e.y - y, e.x - x))) > arc) continue;
+      best = e; bestD = d;
+    }
+    return best;
+  }
+
+  // --- feedback from enemies ---------------------------------------------
+
+  damagePlayer(amount, source) {
+    const dealt = this.player.takeDamage(amount);
+    if (dealt > 0) this.audio?.play('hurt');
+    void source;
+  }
+
+  shovePlayer(dx, dy, force) {
+    const len = Math.hypot(dx, dy) || 1;
+    this.player.vx += (dx / len) * force;
+    this.player.vy += (dy / len) * force;
+  }
+
+  blinkEnemy(enemy, dx, dy, dist) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const a = Math.atan2(dy, dx) + (Math.random() - 0.5) * 1.6;
+      const nx = enemy.x + Math.cos(a) * dist;
+      const ny = enemy.y + Math.sin(a) * dist;
+      if (collides(this.level, nx, ny, enemy.radius)) continue;
+      this.spawnHitBurst(enemy.x, enemy.y, enemy.z, [190, 110, 255], 10);
+      enemy.x = nx; enemy.y = ny;
+      this.spawnHitBurst(nx, ny, enemy.z, [190, 110, 255], 10);
+      this.audio?.play('blink');
+      return;
+    }
+  }
+
+  onEnemyDeath(enemy) {
+    this.runKills++;
+    this.player.kills++;
+    this.audio?.play(enemy.type.boss ? 'bossDeath' : 'kill');
+    this.spawnHitBurst(enemy.x, enemy.y, enemy.z, [255, 190, 140], enemy.type.boss ? 40 : 14);
+    if (enemy.type.boss) {
+      this.pushLog('The Warden falls', '#ffd76a');
+      this.player.shake = 1;
+    }
+    // Small chance of a drop so long fights stay sustainable.
+    if (Math.random() < (enemy.type.boss ? 1 : 0.16)) {
+      this.level.props.push({
+        kind: Math.random() < 0.5 ? 'health' : 'mana',
+        x: enemy.x, y: enemy.y, z: 0.35, phase: 0, taken: false,
+      });
+    }
+  }
+
+  updatePickups() {
+    const p = this.player;
+    for (const prop of this.level.props) {
+      if (prop.kind !== 'health' && prop.kind !== 'mana') continue;
+      if (prop.taken) continue;
+      if (Math.hypot(p.x - prop.x, p.y - prop.y) > 0.65) continue;
+      prop.taken = true;
+      if (prop.kind === 'health') { p.heal(28); this.pushLog('+28 vitality', '#ff6a86'); }
+      else { p.restore(45); this.pushLog('+45 mana', '#6ec8ff'); }
+      this.audio?.play('pickup');
+    }
+  }
+
+  // --- particles ----------------------------------------------------------
+
+  spawnHitBurst(x, y, z, color, count) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 0.8 + Math.random() * 3.2;
+      this.particles.push({
+        x, y, z, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (Math.random() - 0.3) * 1.6,
+        life: 0.25 + Math.random() * 0.3, maxLife: 0.55,
+        color, size: 0.16 + Math.random() * 0.18, additive: true, gravity: 2.2,
+      });
+    }
+  }
+
+  spawnEmber(x, y, z, color) {
+    this.particles.push({
+      x: x + (Math.random() - 0.5) * 0.4, y: y + (Math.random() - 0.5) * 0.4, z: z + Math.random() * 0.3,
+      vx: 0, vy: 0, vz: 0.7,
+      life: 0.4, maxLife: 0.4, color, size: 0.12, additive: true,
+    });
+  }
+
+  spawnRing(x, y, z, radius, color) {
+    const n = Math.round(18 + radius * 8);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
+      this.particles.push({
+        x, y, z: z + Math.random() * 0.4,
+        vx: Math.cos(a) * radius * 3.2, vy: Math.sin(a) * radius * 3.2, vz: 0.2,
+        life: 0.3, maxLife: 0.3, color, size: 0.3, additive: true,
+      });
+    }
+  }
+
+  spawnBeam(from, to, color) {
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const dz = (to.z === undefined ? 0.5 : to.z) - (from.z === undefined ? 0.5 : from.z);
+    const dist = Math.hypot(dx, dy);
+    const n = Math.max(4, Math.round(dist * 7));
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      this.particles.push({
+        x: from.x + dx * t + (Math.random() - 0.5) * 0.08,
+        y: from.y + dy * t + (Math.random() - 0.5) * 0.08,
+        z: (from.z === undefined ? 0.5 : from.z) + dz * t + (Math.random() - 0.5) * 0.06,
+        vx: 0, vy: 0, vz: 0.15,
+        life: 0.14 + Math.random() * 0.1, maxLife: 0.24,
+        color, size: 0.28, additive: true,
+      });
+    }
+  }
+
+  spawnSwipe(enemy, target) {
+    const a = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+    for (let i = 0; i < 10; i++) {
+      const t = (i / 9 - 0.5) * 1.1;
+      this.particles.push({
+        x: enemy.x + Math.cos(a + t) * 0.8,
+        y: enemy.y + Math.sin(a + t) * 0.8,
+        z: 0.5, vx: Math.cos(a) * 2, vy: Math.sin(a) * 2, vz: 0,
+        life: 0.16, maxLife: 0.16, color: [255, 120, 120], size: 0.22, additive: true,
+      });
+    }
+    this.audio?.play('swipe');
+  }
+
+  updateParticles(dt) {
+    const out = [];
+    for (const q of this.particles) {
+      q.life -= dt;
+      if (q.life <= 0) continue;
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      q.z += (q.vz || 0) * dt;
+      if (q.gravity) q.vz = (q.vz || 0) - q.gravity * dt;
+      if (q.z < 0.05) { q.z = 0.05; q.vz = 0; }
+      const drag = Math.exp(-4 * dt);
+      q.vx *= drag; q.vy *= drag;
+      out.push(q);
+    }
+    this.particles = out;
+  }
+
+  // --- render feed --------------------------------------------------------
+
+  collectSprites(time) {
+    const out = [];
+    const sprites = this.tex.sprites;
+
+    for (const prop of this.level.props) {
+      if (prop.kind === 'torch') {
+        const frames = sprites.torch;
+        out.push({
+          x: prop.x, y: prop.y, z: prop.z,
+          w: 0.85, h: 0.85, additive: true, tint: prop.hue,
+          tex: frames[Math.floor((time * 11 + prop.phase) % frames.length)],
+        });
+      } else if (!prop.taken) {
+        const frames = sprites[prop.kind];
+        out.push({
+          x: prop.x, y: prop.y,
+          z: prop.z + Math.sin(time * 2.4 + prop.phase) * 0.07,
+          w: 0.5, h: 0.5, additive: true, tex: frames[0],
+        });
+      }
+    }
+
+    const pf = sprites.portal;
+    out.push({
+      x: this.level.portal.x, y: this.level.portal.y, z: 0.85,
+      w: 1.9, h: 2.4, additive: true,
+      alpha: this.portalReady === false ? 0.35 : 1,
+      tex: pf[Math.floor(time * 8) % pf.length],
+    });
+
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const frames = sprites[e.type.sprite];
+      const idx = Math.floor(e.bob * 0.9) % frames.length;
+      const size = e.height * SPRITE_SCALE;
+      let tint = null;
+      if (e.effects.chill > 0) tint = [150, 210, 255];
+      else if (e.effects.poison > 0) tint = [190, 255, 150];
+      else if (e.effects.burn > 0) tint = [255, 190, 150];
+      out.push({
+        x: e.x, y: e.y,
+        z: e.z + (e.type.hover ? Math.sin(e.bob) * 0.09 : 0),
+        w: size, h: size,
+        tex: frames[idx],
+        creature: true,
+        tint,
+        // A hit reads as a bright pulse, a wind-up as a red one — neither
+        // should erase the creature you are trying to look at.
+        flash: e.hitFlash > 0 ? 0.5 : (e.windup > 0 ? 0.34 : 0),
+        flashColor: e.hitFlash > 0 ? undefined : [255, 110, 110],
+      });
+    }
+
+    for (const b of this.projectiles) {
+      out.push({
+        x: b.x, y: b.y, z: b.z,
+        w: b.size * 2.2, h: b.size * 2.2,
+        tex: this.tex.glow, tint: b.color, additive: true,
+      });
+    }
+
+    for (const q of this.particles) {
+      out.push({
+        x: q.x, y: q.y, z: q.z,
+        w: q.size, h: q.size,
+        tex: this.tex.glow, tint: q.color, additive: true,
+        alpha: Math.min(1, q.life / q.maxLife),
+      });
+    }
+
+    return out;
+  }
+
+  // --- rewards ------------------------------------------------------------
+
+  applyReward(reward) {
+    const p = this.player;
+    switch (reward.type) {
+      case 'spell':
+        if (reward.slot !== undefined) p.replaceSpell(reward.slot, reward.spellId);
+        else p.addSpell(reward.spellId);
+        this.pushLog(`Learned ${SPELLS[reward.spellId].name}`, '#ffd76a');
+        break;
+      case 'empower': {
+        const entry = p.slots.find((s) => s && s.id === reward.spellId);
+        if (entry) entry.rank++;
+        this.pushLog(`${SPELLS[reward.spellId].name} empowered`, '#ffd76a');
+        break;
+      }
+      case 'health': p.maxHealth += reward.amount; p.heal(reward.amount); break;
+      case 'mana': p.maxMana += reward.amount; p.restore(reward.amount); break;
+      case 'regen': p.regen += reward.amount; break;
+      case 'speed': p.speedMul += reward.amount; break;
+      case 'haste': p.mods.cdMul *= reward.amount; break;
+      case 'power': p.mods.dmgMul *= reward.amount; break;
+      case 'restore': p.heal(p.maxHealth); p.restore(p.maxMana); break;
+    }
+    this.audio?.play('reward');
+  }
+}
+
+export { PLAYER };

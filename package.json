@@ -1,0 +1,11 @@
+{
+  "name": "wizrogue",
+  "version": "0.1.0",
+  "description": "A first-person spell-casting roguelike set in procedurally generated linear corridors.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node test/smoke.mjs && node test/sim.mjs"
+  }
+}
