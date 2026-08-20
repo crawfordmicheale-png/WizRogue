@@ -14,6 +14,8 @@ export class Hud {
     this.mp = root.querySelector('.meter.mp');
     this.boss = root.getElementById('bossbar');
     this.bossFill = root.querySelector('#bossbar .track i');
+    this.bossName = root.querySelector('#bossbar .boss-name');
+    this.crosshair = root.getElementById('crosshair');
     this.signature = '';
     this.logSignature = '';
     this.slotEls = [];
@@ -76,21 +78,25 @@ export class Hud {
       div.classList.toggle('broke', p.mana < stats.cost);
     }
 
+    // hit marker: a brief gold pop on the crosshair whenever a spell connects
+    this.crosshair.classList.toggle('hit', game.hitMarker > 0);
+
     // objective line
+    const boss = game.enemies.find((e) => e.type.boss && !e.dead);
     const live = game.level.encounters.find((e) => e.triggered && !e.cleared);
     if (live) {
       const n = game.enemies.filter((e) => e.encounter === live && !e.dead).length;
       this.objective.textContent = live.kind === 'boss'
-        ? 'The Warden bars the way'
+        ? `The ${boss ? boss.name : 'Warden'} bars the way`
         : `Sealed — ${n} ${n === 1 ? 'foe' : 'foes'} remain`;
     } else {
       this.objective.textContent = game.portalReady === false ? 'The portal is dormant' : 'Descend — find the portal';
     }
 
     // boss bar
-    const boss = game.enemies.find((e) => e.type.boss && !e.dead);
     if (boss && boss.awake) {
       this.boss.hidden = false;
+      this.bossName.textContent = boss.name;
       this.bossFill.style.width = `${Math.max(0, (boss.hp / boss.maxHp) * 100)}%`;
     } else {
       this.boss.hidden = true;

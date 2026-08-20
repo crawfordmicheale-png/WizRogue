@@ -145,6 +145,13 @@ html, body {
   background: rgba(230, 225, 255, 0.85);
   box-shadow: 0 0 4px rgba(120, 160, 255, 0.8);
 }
+/* Hit marker: ticks flare gold and spring outward for a beat when a spell lands. */
+#crosshair { transition: transform 0.1s ease-out; }
+#crosshair.hit { transform: translate(-50%, -50%) scale(1.45); opacity: 1; }
+#crosshair.hit span {
+  background: rgba(255, 215, 106, 0.95);
+  box-shadow: 0 0 6px rgba(255, 190, 80, 0.9);
+}
 #crosshair span:nth-child(1) { left: 50%; top: 0; width: 1px; height: 6px; margin-left: -0.5px; }
 #crosshair span:nth-child(2) { left: 50%; bottom: 0; width: 1px; height: 6px; margin-left: -0.5px; }
 #crosshair span:nth-child(3) { top: 50%; left: 0; height: 1px; width: 6px; margin-top: -0.5px; }

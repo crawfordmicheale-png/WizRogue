@@ -63,7 +63,10 @@ export class Menus {
   }
 
   // --- title --------------------------------------------------------------
-  title({ onStart, onDaily, onSettings, best }) {
+  title({ onStart, onDaily, onSettings, onContinue, best, savedRun }) {
+    const continueBtn = savedRun && onContinue
+      ? `<button class="btn" id="continueBtn">Continue — depth ${savedRun.depth}${savedRun.dailyLabel ? ' (daily)' : ''}</button>`
+      : '';
     this.render(`
       <h1 class="title">WizRogue</h1>
       <p class="subtitle">Five spells · one corridor · no way back</p>
@@ -73,20 +76,23 @@ export class Menus {
       </p>
       ${controlHints()}
       <div class="row">
-        <button class="btn" id="startBtn">Enter the corridor</button>
+        ${continueBtn}
+        <button class="btn${continueBtn ? ' ghost' : ''}" id="startBtn">Enter the corridor</button>
         <button class="btn ghost" id="dailyBtn">Daily corridor</button>
         <button class="btn ghost" id="settingsBtn">Settings</button>
       </div>
       ${best ? `<p class="hint">Best descent — depth ${best.depth} · ${best.kills} slain · ${esc(best.archetype)}</p>` : ''}
     `);
+    if (continueBtn) this.el.querySelector('#continueBtn').onclick = onContinue;
     this.el.querySelector('#startBtn').onclick = onStart;
     this.el.querySelector('#dailyBtn').onclick = onDaily;
     this.el.querySelector('#settingsBtn').onclick = onSettings;
-    this.attachKeys({ Enter: onStart, ' ': onStart });
+    const primary = savedRun && onContinue ? onContinue : onStart;
+    this.attachKeys({ Enter: primary, ' ': primary });
   }
 
   // --- settings -------------------------------------------------------------
-  settingsMenu({ muted, onToggleMute, touch, onBack }) {
+  settingsMenu({ muted, onToggleMute, onToggleMusic, touch, onBack }) {
     const toggleRow = (id, label, on) => `
       <div class="setting-row">
         <span>${label}</span>
@@ -109,6 +115,7 @@ export class Menus {
         ${touch ? toggleRow('hapticsBtn', 'Vibration', settings.haptics) : ''}
         ${touch ? toggleRow('leftyBtn', 'Left-handed layout', settings.lefty) : ''}
         ${toggleRow('soundBtn', 'Sound', !muted)}
+        ${toggleRow('musicBtn', 'Music', settings.music)}
       </div>
       <div class="row"><button class="btn" id="backBtn">Back</button></div>
     `);
@@ -141,6 +148,7 @@ export class Menus {
       return settings.lefty;
     });
     bindToggle('soundBtn', () => !muted, () => !onToggleMute());
+    bindToggle('musicBtn', () => settings.music, () => onToggleMusic());
 
     this.el.querySelector('#backBtn').onclick = onBack;
     this.attachKeys({}); // clear the previous screen's shortcuts
@@ -253,9 +261,11 @@ export class Menus {
   death(stats, player, { isRecord, dailyLabel, onRetry, onTitle }) {
     const mins = Math.floor(stats.time / 60);
     const secs = Math.floor(stats.time % 60).toString().padStart(2, '0');
+    const recap = stats.killedBy ? `Slain by ${esc(article(stats.killedBy))} · ` : '';
+    const canShare = !!(navigator.clipboard && dailyLabel);
     this.render(`
       <h2 class="title" style="font-size:clamp(30px,6vw,54px)">The corridor keeps you</h2>
-      <p class="subtitle">${esc(stats.archetype)} · run ended at depth ${stats.depth}${dailyLabel ? ` · daily ${esc(dailyLabel)}` : ''}</p>
+      <p class="subtitle">${recap}${esc(stats.archetype)} · run ended at depth ${stats.depth}${dailyLabel ? ` · daily ${esc(dailyLabel)}` : ''}</p>
       ${isRecord ? '<p class="record">✦ Deepest descent yet ✦</p>' : ''}
       <div class="stats">
         <div class="stat"><b>${stats.depth}</b><span>depth reached</span></div>
@@ -265,14 +275,31 @@ export class Menus {
       ${loadoutStrip(player, false)}
       <div class="row">
         <button class="btn" id="retryBtn">New run</button>
+        ${canShare ? '<button class="btn ghost" id="shareBtn">Copy result</button>' : ''}
         <button class="btn ghost" id="titleBtn">Title screen</button>
       </div>
       <p class="hint">Seed ${stats.seed}</p>
     `);
     this.el.querySelector('#retryBtn').onclick = onRetry;
     this.el.querySelector('#titleBtn').onclick = onTitle;
+    if (canShare) {
+      const btn = this.el.querySelector('#shareBtn');
+      btn.onclick = () => {
+        const text = `WizRogue daily ${dailyLabel} — depth ${stats.depth} · ${stats.kills} slain · ${mins}:${secs} · ${stats.archetype}`;
+        navigator.clipboard.writeText(text)
+          .then(() => { btn.textContent = 'Copied!'; })
+          .catch(() => { btn.textContent = 'Copy failed'; });
+      };
+    }
     this.attachKeys({ Enter: onRetry });
   }
+}
+
+// "a Brute", "an Elder Wisp" — but named things like the Warden take "the".
+function article(name) {
+  if (/warden/i.test(name)) return `the ${name}`;
+  if (/^a /i.test(name)) return name; // already phrased, e.g. "a Volatile death-burst"
+  return `${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}`;
 }
 
 function spellLine(id, player) {

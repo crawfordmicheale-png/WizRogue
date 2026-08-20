@@ -9,6 +9,7 @@ export const settings = {
   haptics: true,    // vibration on phones
   aimAssist: true,  // gentle magnetism on touch and gamepad
   lefty: false,     // mirrored touch layout
+  music: true,      // generative ambient layer
 };
 
 const hasStorage = typeof localStorage !== 'undefined';
@@ -58,6 +59,32 @@ export function recordRun(stats) {
     } catch { /* quota */ }
   }
   return better;
+}
+
+// --- mid-run save ------------------------------------------------------------
+// One snapshot, written at the start of every depth. Dying or abandoning
+// deletes it; a crash or closed tab leaves it, and the title screen offers to
+// resume from the top of the floor you were on.
+
+const RUN_KEY = 'wizrogue.run';
+
+export function loadRunState() {
+  if (!hasStorage) return null;
+  try {
+    const raw = localStorage.getItem(RUN_KEY);
+    const run = raw ? JSON.parse(raw) : null;
+    return run && run.seed !== undefined && run.depth >= 1 && run.player ? run : null;
+  } catch { return null; }
+}
+
+export function saveRunState(data) {
+  if (!hasStorage) return;
+  try { localStorage.setItem(RUN_KEY, JSON.stringify(data)); } catch { /* quota */ }
+}
+
+export function clearRunState() {
+  if (!hasStorage) return;
+  try { localStorage.removeItem(RUN_KEY); } catch { /* nothing to do */ }
 }
 
 // --- daily seed --------------------------------------------------------------

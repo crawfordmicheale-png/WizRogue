@@ -1,6 +1,6 @@
 // Offline support. Network-first with a cache fallback: players online always
 // get the latest build, players in a tunnel keep descending.
-const VERSION = 'wizrogue-v1';
+const VERSION = 'wizrogue-v2';
 
 const ASSETS = [
   './',
