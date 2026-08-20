@@ -95,7 +95,10 @@ export class Enemy {
     this.hitFlash = 0.09;
     this.awake = true;
     if (this.encounter && !this.encounter.triggered) game.triggerEncounter(this.encounter);
-    if (!opts.silent) game.spawnHitBurst(this.x, this.y, this.z, opts.color || [255, 220, 180], 5);
+    if (!opts.silent) {
+      game.spawnHitBurst(this.x, this.y, this.z, opts.color || [255, 220, 180], 5);
+      game.addDamageNumber(this, dealt, opts.color);
+    }
     if (this.hp <= 0) this.kill(game);
     return dealt;
   }

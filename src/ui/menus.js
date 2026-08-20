@@ -1,5 +1,6 @@
 import { ARCHETYPES } from '../game/archetypes.js';
 import { SPELLS, SCHOOLS, spellStats } from '../game/spells.js';
+import { settings, saveSettings } from '../settings.js';
 
 const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -62,7 +63,7 @@ export class Menus {
   }
 
   // --- title --------------------------------------------------------------
-  title(onStart) {
+  title({ onStart, onDaily, onSettings, best }) {
     this.render(`
       <h1 class="title">WizRogue</h1>
       <p class="subtitle">Five spells · one corridor · no way back</p>
@@ -71,14 +72,82 @@ export class Menus {
         and see how far down you get before something in the dark is faster than your cooldowns.
       </p>
       ${controlHints()}
-      <div class="row"><button class="btn" id="startBtn">Enter the corridor</button></div>
+      <div class="row">
+        <button class="btn" id="startBtn">Enter the corridor</button>
+        <button class="btn ghost" id="dailyBtn">Daily corridor</button>
+        <button class="btn ghost" id="settingsBtn">Settings</button>
+      </div>
+      ${best ? `<p class="hint">Best descent — depth ${best.depth} · ${best.kills} slain · ${esc(best.archetype)}</p>` : ''}
     `);
     this.el.querySelector('#startBtn').onclick = onStart;
+    this.el.querySelector('#dailyBtn').onclick = onDaily;
+    this.el.querySelector('#settingsBtn').onclick = onSettings;
     this.attachKeys({ Enter: onStart, ' ': onStart });
   }
 
+  // --- settings -------------------------------------------------------------
+  settingsMenu({ muted, onToggleMute, touch, onBack }) {
+    const toggleRow = (id, label, on) => `
+      <div class="setting-row">
+        <span>${label}</span>
+        <button class="pill${on ? ' on' : ''}" id="${id}">${on ? 'On' : 'Off'}</button>
+      </div>`;
+
+    this.render(`
+      <h2 class="section-title">Settings</h2>
+      <p class="section-sub">Kept between runs.</p>
+      <div class="settings">
+        <div class="setting-row">
+          <span>Look sensitivity</span>
+          <span class="sens">
+            <input type="range" id="sensRange" min="0.4" max="2" step="0.1" value="${settings.sens}">
+            <b id="sensVal">${settings.sens.toFixed(1)}×</b>
+          </span>
+        </div>
+        ${toggleRow('shakeBtn', 'Screen shake', settings.shake)}
+        ${toggleRow('assistBtn', 'Aim assist (touch & gamepad)', settings.aimAssist)}
+        ${touch ? toggleRow('hapticsBtn', 'Vibration', settings.haptics) : ''}
+        ${touch ? toggleRow('leftyBtn', 'Left-handed layout', settings.lefty) : ''}
+        ${toggleRow('soundBtn', 'Sound', !muted)}
+      </div>
+      <div class="row"><button class="btn" id="backBtn">Back</button></div>
+    `);
+
+    const range = this.el.querySelector('#sensRange');
+    const val = this.el.querySelector('#sensVal');
+    range.oninput = () => {
+      settings.sens = +range.value;
+      val.textContent = `${settings.sens.toFixed(1)}×`;
+      saveSettings();
+    };
+
+    const bindToggle = (id, get, set) => {
+      const btn = this.el.querySelector(`#${id}`);
+      if (!btn) return;
+      btn.onclick = () => {
+        const on = set();
+        btn.textContent = on ? 'On' : 'Off';
+        btn.classList.toggle('on', on);
+      };
+      void get;
+    };
+    bindToggle('shakeBtn', () => settings.shake, () => { settings.shake = !settings.shake; saveSettings(); return settings.shake; });
+    bindToggle('assistBtn', () => settings.aimAssist, () => { settings.aimAssist = !settings.aimAssist; saveSettings(); return settings.aimAssist; });
+    bindToggle('hapticsBtn', () => settings.haptics, () => { settings.haptics = !settings.haptics; saveSettings(); return settings.haptics; });
+    bindToggle('leftyBtn', () => settings.lefty, () => {
+      settings.lefty = !settings.lefty;
+      document.body.classList.toggle('lefty', settings.lefty);
+      saveSettings();
+      return settings.lefty;
+    });
+    bindToggle('soundBtn', () => !muted, () => !onToggleMute());
+
+    this.el.querySelector('#backBtn').onclick = onBack;
+    this.attachKeys({}); // clear the previous screen's shortcuts
+  }
+
   // --- archetype select ---------------------------------------------------
-  archetypes(onPick) {
+  archetypes(onPick, dailyLabel = null) {
     const cards = ARCHETYPES.map((a, i) => {
       const spells = a.spells.map((id) => {
         const sp = SPELLS[id];
@@ -100,7 +169,9 @@ export class Menus {
 
     this.render(`
       <h2 class="section-title">Choose your discipline</h2>
-      <p class="section-sub">Two spells to start. Slots three, four and five open at depths 3, 5 and 7.</p>
+      <p class="section-sub">${dailyLabel
+        ? `Daily corridor · ${esc(dailyLabel)} — everyone descends the same halls today.`
+        : 'Two spells to start. Slots three, four and five open at depths 3, 5 and 7.'}</p>
       <div class="cards">${cards}</div>
     `);
 
@@ -158,31 +229,34 @@ export class Menus {
   }
 
   // --- pause --------------------------------------------------------------
-  pause({ onResume, onAbandon, muted, onToggleMute }) {
+  pause({ onResume, onAbandon, onSettings, muted, onToggleMute }) {
     this.render(`
       <h2 class="section-title">Paused</h2>
       <p class="section-sub">The corridor waits.</p>
       <div class="row">
         <button class="btn" id="resumeBtn">Resume</button>
         <button class="btn ghost" id="muteBtn">${muted ? 'Sound: off' : 'Sound: on'}</button>
+        <button class="btn ghost" id="settingsBtn">Settings</button>
         <button class="btn ghost" id="abandonBtn">Abandon run</button>
       </div>
       ${controlHints()}
     `);
     this.el.querySelector('#resumeBtn').onclick = onResume;
     this.el.querySelector('#abandonBtn').onclick = onAbandon;
+    this.el.querySelector('#settingsBtn').onclick = onSettings;
     const mb = this.el.querySelector('#muteBtn');
     mb.onclick = () => { const m = onToggleMute(); mb.textContent = m ? 'Sound: off' : 'Sound: on'; };
     this.attachKeys({ Enter: onResume });
   }
 
   // --- death --------------------------------------------------------------
-  death(stats, player, onRetry, onTitle) {
+  death(stats, player, { isRecord, dailyLabel, onRetry, onTitle }) {
     const mins = Math.floor(stats.time / 60);
     const secs = Math.floor(stats.time % 60).toString().padStart(2, '0');
     this.render(`
       <h2 class="title" style="font-size:clamp(30px,6vw,54px)">The corridor keeps you</h2>
-      <p class="subtitle">${esc(stats.archetype)} · run ended at depth ${stats.depth}</p>
+      <p class="subtitle">${esc(stats.archetype)} · run ended at depth ${stats.depth}${dailyLabel ? ` · daily ${esc(dailyLabel)}` : ''}</p>
+      ${isRecord ? '<p class="record">✦ Deepest descent yet ✦</p>' : ''}
       <div class="stats">
         <div class="stat"><b>${stats.depth}</b><span>depth reached</span></div>
         <div class="stat"><b>${stats.kills}</b><span>slain</span></div>

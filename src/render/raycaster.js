@@ -1,6 +1,7 @@
 import { RENDER } from '../config.js';
 import { T } from '../world/mapgen.js';
 import { clamp } from '../util/rng.js';
+import { settings } from '../settings.js';
 
 const FOG = RENDER.fog;
 const WHITE = [255, 255, 255];
@@ -38,14 +39,16 @@ export class Renderer {
     const planeX = -dirY * planeLen, planeY = dirX * planeLen;
 
     // Screen-space horizon: look angle, walk bob and hit shake all live here.
-    const shake = p.shake > 0 ? Math.sin(time * 47) * p.shake * 4 : 0;
+    const shake = settings.shake && p.shake > 0 ? Math.sin(time * 47) * p.shake * 4 : 0;
     const horizon = h * 0.5 + p.pitch * h + p.bob + shake;
+    this.cam = { dirX, dirY, planeX, planeY, horizon };
 
     this.drawFloorAndCeiling(level, p, dirX, dirY, planeX, planeY, horizon);
     this.drawWalls(level, p, dirX, dirY, planeX, planeY, horizon, time);
     this.drawSprites(game, p, dirX, dirY, planeX, planeY, horizon, time);
 
     this.ctx.putImageData(this.image, 0, 0);
+    this.drawFloaters(game);
     this.drawOverlay(game, time);
   }
 
@@ -236,6 +239,44 @@ export class Renderer {
     }
   }
 
+  // Floating damage numbers, projected the same way sprites are but drawn as
+  // text with the 2D context after the pixel buffer lands.
+  drawFloaters(game) {
+    const list = game.floaters;
+    if (!list || !list.length) return;
+    const { w, h, ctx, cam, zbuf } = this;
+    const p = game.player;
+    const invDet = 1 / (cam.planeX * cam.dirY - cam.dirX * cam.planeY);
+    ctx.textAlign = 'center';
+
+    for (const f of list) {
+      const sx = f.x - p.x, sy = f.y - p.y;
+      const tx = invDet * (cam.dirY * sx - cam.dirX * sy);
+      const ty = invDet * (-cam.planeY * sx + cam.planeX * sy);
+      if (ty <= 0.25 || ty > RENDER.viewDistance * 0.8) continue;
+
+      const scale = h / ty;
+      const screenX = (w / 2) * (1 + tx / ty);
+      const screenY = cam.horizon + (0.5 - f.z) * scale;
+      if (screenX < -20 || screenX > w + 20 || screenY < -10 || screenY > h + 10) continue;
+      const col = Math.max(0, Math.min(w - 1, Math.round(screenX)));
+      if (ty >= zbuf[col] + 0.4) continue; // behind a wall
+
+      const k = f.t / f.life;
+      const alpha = k < 0.15 ? k / 0.15 : 1 - Math.max(0, (k - 0.55) / 0.45);
+      const px = Math.round(clamp(11 / ty * 2.4, 6, 13));
+      const c = f.color;
+      ctx.font = `bold ${px}px ${'ui-monospace, Menlo, monospace'}`;
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.fillStyle = '#08040f';
+      ctx.fillText(String(Math.round(f.value)), screenX + 1, screenY + 1);
+      ctx.fillStyle = `rgb(${Math.min(255, c[0] + 70)},${Math.min(255, c[1] + 70)},${Math.min(255, c[2] + 70)})`;
+      ctx.fillText(String(Math.round(f.value)), screenX, screenY);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'start';
+  }
+
   // Hands, flashes and vignette are cheaper to draw with the 2D context.
   drawOverlay(game, time) {
     const ctx = this.ctx;
@@ -352,6 +393,17 @@ export class Renderer {
           ctx.beginPath();
           ctx.arc(-0.5, -13, 6 + Math.sin(time * 3 + side) * 0.8, 0, Math.PI * 2);
           ctx.stroke();
+          // Three motes orbiting the charge make "ready" legible at a glance.
+          for (let m = 0; m < 3; m++) {
+            const oa = time * 2.6 * side + m * 2.094;
+            const or = 7.5 + Math.sin(time * 5 + m) * 1.2;
+            const ox = -0.5 + Math.cos(oa) * or;
+            const oy = -13 + Math.sin(oa) * or * 0.55;
+            ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${0.55 + Math.sin(time * 7 + m) * 0.25})`;
+            ctx.beginPath();
+            ctx.arc(ox, oy, 0.9, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
       ctx.restore();
