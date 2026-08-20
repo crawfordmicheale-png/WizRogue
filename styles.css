@@ -361,6 +361,11 @@ html, body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
 }
 
+/* left-handed layout: stick under the right thumb, cast button on the left */
+body.lefty .tzone.move { left: auto; right: 0; width: 45%; }
+body.lefty .tzone.look { right: auto; left: 0; width: 55%; }
+body.lefty #castBtn { right: auto; left: calc(20px + var(--safe-l)); }
+
 /* touch layout: vitals move to the top left so both thumbs stay free */
 body.touch #vitals {
   position: fixed;
@@ -377,6 +382,17 @@ body.touch #slots { gap: 7px; }
 body.touch .slot { width: 52px; height: 58px; }
 body.touch .hud-top { justify-content: flex-start; padding-left: calc(14px + var(--safe-l)); padding-right: 64px; }
 body.touch .chip { font-size: 10px; padding: 5px 11px; }
+
+/* --- portal transition ----------------------------------------------------- */
+#fader {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 48%, rgba(244, 238, 255, 0.98), rgba(160, 125, 255, 0.92) 65%, rgba(90, 70, 200, 0.9));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+  z-index: 6;
+}
+#fader.on { opacity: 1; }
 
 /* --- overlay screens --------------------------------------------------- */
 #overlay {
@@ -497,6 +513,66 @@ kbd {
   padding: 1px 6px;
   font: inherit; font-size: 10.5px;
   color: var(--ink);
+}
+
+/* --- settings ---------------------------------------------------------------- */
+.settings {
+  max-width: 440px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  text-align: left;
+}
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  background: linear-gradient(180deg, rgba(28, 20, 50, 0.85), rgba(12, 9, 24, 0.85));
+  border: 1px solid var(--edge-soft);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+}
+.setting-row .sens { display: flex; align-items: center; gap: 10px; }
+.setting-row .sens b { min-width: 36px; text-align: right; color: var(--gold); }
+.setting-row input[type="range"] {
+  width: 130px;
+  accent-color: var(--gold);
+}
+.pill {
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  min-width: 62px;
+  padding: 6px 0;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dim);
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.pill.on {
+  color: #10091c;
+  background: linear-gradient(180deg, #ffe9a8, var(--gold));
+  border-color: transparent;
+}
+
+.record {
+  color: var(--gold);
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  font-size: 12px;
+  margin: 14px 0 0;
+  text-shadow: 0 0 18px rgba(255, 215, 106, 0.55);
+  animation: recordPulse 1.6s ease-in-out infinite;
+}
+@keyframes recordPulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; text-shadow: 0 0 26px rgba(255, 215, 106, 0.85); }
 }
 
 .stats { display: flex; gap: 26px; justify-content: center; margin: 20px 0 4px; flex-wrap: wrap; }

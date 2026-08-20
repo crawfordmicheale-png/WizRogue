@@ -7,10 +7,13 @@ import { TouchControls } from './ui/touch.js';
 import { Audio } from './ui/audio.js';
 import { Hud } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
+import { settings, loadSettings, loadBest, recordRun, dailySeed } from './settings.js';
 
 class App {
   constructor() {
+    loadSettings();
     this.canvas = document.getElementById('view');
+    this.fader = document.getElementById('fader');
     this.tex = buildTextures();
     this.audio = new Audio();
     this.input = new Input(this.canvas);
@@ -19,6 +22,8 @@ class App {
     this.menus = new Menus(document);
     this.mode = 'title';
     this.last = performance.now();
+    this.pendingSeed = null;   // set when a daily run was requested
+    this.dailyLabel = null;
 
     this.game = new Game(this.tex, this.audio, {
       onLevelClear: () => this.showRewards(),
@@ -27,6 +32,7 @@ class App {
 
     this.touchUI = new TouchControls(document, this.input, { onPause: () => this.pause() });
     if (this.input.touch) document.body.classList.add('touch');
+    document.body.classList.toggle('lefty', settings.lefty);
     this.input.onTouchMode = () => {
       document.body.classList.add('touch');
       this.touchUI.show(this.mode === 'playing');
@@ -41,8 +47,15 @@ class App {
     window.addEventListener('resize', () => this.renderer.resize(window.innerWidth, window.innerHeight));
     window.addEventListener('blur', () => { if (this.mode === 'playing') this.pause(); });
 
+    this.registerServiceWorker();
     this.showTitle();
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  registerServiceWorker() {
+    if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
   }
 
   // --- screens ------------------------------------------------------------
@@ -51,21 +64,55 @@ class App {
     this.mode = 'title';
     this.hud.show(false);
     this.input.releaseLock();
-    this.menus.title(() => {
-      this.audio.ensure();
-      this.showSelect();
+    this.menus.title({
+      best: loadBest(),
+      onStart: () => {
+        this.audio.ensure();
+        this.pendingSeed = null;
+        this.dailyLabel = null;
+        this.showSelect();
+      },
+      onDaily: () => {
+        this.audio.ensure();
+        const d = dailySeed();
+        this.pendingSeed = d.seed;
+        this.dailyLabel = d.label;
+        this.showSelect();
+      },
+      onSettings: () => this.showSettings(() => this.showTitle()),
+    });
+  }
+
+  showSettings(onBack) {
+    this.menus.settingsMenu({
+      muted: this.audio.muted,
+      onToggleMute: () => { this.audio.setMuted(!this.audio.muted); return this.audio.muted; },
+      touch: this.input.touch,
+      onBack,
     });
   }
 
   showSelect() {
     this.mode = 'select';
     this.hud.show(false);
-    this.menus.archetypes((id) => this.startRun(id));
+    this.menus.archetypes((id) => this.startRun(id), this.dailyLabel);
   }
 
   startRun(archetypeId) {
-    this.game.startRun(archetypeId);
+    if (this.pendingSeed !== null) this.game.startRun(archetypeId, this.pendingSeed);
+    else this.game.startRun(archetypeId);
+    this.enterImmersion();
     this.resume();
+  }
+
+  // Fullscreen + landscape are best-effort: browsers that refuse just play inline.
+  enterImmersion() {
+    if (!this.input.touch) return;
+    const el = document.documentElement;
+    const fs = el.requestFullscreen?.() || el.webkitRequestFullscreen?.();
+    if (fs && typeof fs.then === 'function') {
+      fs.then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {});
+    }
   }
 
   resume() {
@@ -82,9 +129,14 @@ class App {
     if (this.mode !== 'playing') return;
     this.mode = 'paused';
     this.input.releaseLock();
+    this.renderPauseMenu();
+  }
+
+  renderPauseMenu() {
     this.menus.pause({
       onResume: () => this.resume(),
       onAbandon: () => this.showTitle(),
+      onSettings: () => this.showSettings(() => this.renderPauseMenu()),
       muted: this.audio.muted,
       onToggleMute: () => { this.audio.setMuted(!this.audio.muted); return this.audio.muted; },
     });
@@ -98,25 +150,34 @@ class App {
   showRewards() {
     this.mode = 'reward';
     this.input.releaseLock();
-    const options = rollRewards(this.game);
-    const present = () => {
-      this.menus.rewards(options, this.game.player, this.game.depth, (choice) => {
-        this.game.applyReward(choice);
-        this.game.nextDepth();
-        this.resume();
-      });
-      this.menus.rewardsBack = present;
-    };
-    present();
+    // A short white-out sells stepping through the portal.
+    this.fader.classList.add('on');
+    setTimeout(() => {
+      const options = rollRewards(this.game);
+      const present = () => {
+        this.menus.rewards(options, this.game.player, this.game.depth, (choice) => {
+          this.game.applyReward(choice);
+          this.game.nextDepth();
+          this.resume();
+        });
+        this.menus.rewardsBack = present;
+      };
+      present();
+      this.fader.classList.remove('on');
+    }, 420);
   }
 
   showDeath(stats) {
     this.mode = 'dead';
     this.hud.show(false);
     this.input.releaseLock();
-    this.menus.death(stats, this.game.player,
-      () => this.showSelect(),
-      () => this.showTitle());
+    const isRecord = recordRun(stats);
+    this.menus.death(stats, this.game.player, {
+      isRecord,
+      dailyLabel: this.dailyLabel,
+      onRetry: () => this.showSelect(),
+      onTitle: () => this.showTitle(),
+    });
   }
 
   // --- loop ---------------------------------------------------------------
@@ -125,6 +186,7 @@ class App {
     const dt = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
 
+    this.input.pollGamepad(dt);
     if (this.mode === 'playing') {
       this.input.keyboardTurn(dt);
       this.game.update(dt, this.input);

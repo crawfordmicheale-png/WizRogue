@@ -1,0 +1,14 @@
+{
+  "name": "WizRogue — a first-person spell-casting roguelike",
+  "short_name": "WizRogue",
+  "description": "Five spells, one corridor, no way back. A first-person spell-casting roguelike that runs entirely in the browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#07060e",
+  "theme_color": "#07060e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

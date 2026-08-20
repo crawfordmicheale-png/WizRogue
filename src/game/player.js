@@ -2,6 +2,7 @@ import { PLAYER, slotsForDepth } from '../config.js';
 import { clamp } from '../util/rng.js';
 import { spellStats } from './spells.js';
 import { collides } from './enemies.js';
+import { settings } from '../settings.js';
 
 export class Player {
   constructor(archetype) {
@@ -122,8 +123,9 @@ export class Player {
     for (let i = 0; i < 5; i++) if (this.cooldowns[i] > 0) this.cooldowns[i] -= dt;
 
     // --- look ---
-    this.angle += input.lookX * PLAYER.mouseSens;
-    this.pitch = clamp(this.pitch - input.lookY * PLAYER.mouseSens * 0.85, -PLAYER.pitchLimit, PLAYER.pitchLimit);
+    const sens = PLAYER.mouseSens * settings.sens;
+    this.angle += input.lookX * sens;
+    this.pitch = clamp(this.pitch - input.lookY * sens * 0.85, -PLAYER.pitchLimit, PLAYER.pitchLimit);
     input.consumeLook();
 
     // --- ground movement with a little inertia ---
