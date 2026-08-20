@@ -8,6 +8,8 @@ const BINDINGS = {
   Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4', Digit5: 'slot5',
 };
 
+const clamp1 = (v) => (v < -1 ? -1 : v > 1 ? 1 : v);
+
 export class Input {
   constructor(canvas) {
     this.canvas = canvas;
@@ -19,6 +21,17 @@ export class Input {
     this.locked = false;
     this.onPause = null;
     this.onEscape = null;
+    this.onTouchMode = null;
+
+    // Analog contribution from the on-screen stick, each axis in [-1, 1].
+    this.stickF = 0;
+    this.stickS = 0;
+
+    // Coarse pointers get touch controls up front; a hybrid device flips over
+    // the first time the screen is actually touched. `?touch` forces it on.
+    this.touch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+      || /[?&]touch\b/.test(window.location.search);
+    window.addEventListener('touchstart', () => this.enableTouch(), { once: true, passive: true });
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') { this.onEscape?.(); return; }
@@ -35,6 +48,7 @@ export class Input {
     window.addEventListener('blur', () => this.held.clear());
 
     canvas.addEventListener('mousedown', (e) => {
+      if (this.touch) return;
       if (e.button === 0) { this.held.add('cast'); this.justPressed.add('cast'); }
       if (e.button === 2) { this.held.add('altCast'); this.justPressed.add('altCast'); }
     });
@@ -57,7 +71,15 @@ export class Input {
     });
   }
 
+  enableTouch() {
+    if (this.touch) return;
+    this.touch = true;
+    this.releaseLock();
+    this.onTouchMode?.();
+  }
+
   requestLock() {
+    if (this.touch) return;
     if (!this.locked && this.canvas.requestPointerLock) {
       const r = this.canvas.requestPointerLock();
       if (r && typeof r.catch === 'function') r.catch(() => {});
@@ -70,6 +92,22 @@ export class Input {
 
   down(action) { return this.held.has(action); }
   pressed(action) { return this.justPressed.has(action); }
+
+  // Programmatic press/release, used by the on-screen touch controls.
+  press(action) {
+    if (!this.held.has(action)) this.justPressed.add(action);
+    this.held.add(action);
+  }
+  release(action) { this.held.delete(action); }
+  pressSlot(i) { this.justPressed.add(`slot${i + 1}`); }
+  addLook(dx, dy) { this.lookX += dx; this.lookY += dy; }
+
+  // Keys are digital, the stick is analog; both feed the same movement axes.
+  moveAxes() {
+    const f = (this.down('forward') ? 1 : 0) - (this.down('back') ? 1 : 0) + this.stickF;
+    const s = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0) + this.stickS;
+    return { f: clamp1(f), s: clamp1(s) };
+  }
 
   // Arrow keys turn the view when someone would rather not use the mouse.
   keyboardTurn(dt) {

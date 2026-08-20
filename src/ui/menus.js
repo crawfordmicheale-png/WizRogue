@@ -3,6 +3,29 @@ import { SPELLS, SCHOOLS, spellStats } from '../game/spells.js';
 
 const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const isTouch = () => document.body.classList.contains('touch');
+
+function controlHints() {
+  if (isTouch()) {
+    return `
+      <div class="keys">
+        <span><kbd>Left thumb</kbd> <b>move</b></span>
+        <span><kbd>Right thumb</kbd> <b>look</b></span>
+        <span><kbd>✦</kbd> <b>hold to cast</b></span>
+        <span><kbd>Tap a slot</kbd> <b>select spell</b></span>
+        <span><kbd>Push stick out</kbd> <b>sprint</b></span>
+      </div>`;
+  }
+  return `
+    <div class="keys">
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <b>move</b></span>
+      <span><kbd>Mouse</kbd> <b>look</b></span>
+      <span><kbd>Click</kbd> / <kbd>Space</kbd> <b>cast</b></span>
+      <span><kbd>1</kbd>–<kbd>5</kbd> / <kbd>Wheel</kbd> <b>select spell</b></span>
+      <span><kbd>Shift</kbd> <b>sprint</b></span>
+      <span><kbd>Esc</kbd> <b>pause</b></span>
+    </div>`;
+}
 
 export class Menus {
   constructor(root = document) {
@@ -47,14 +70,7 @@ export class Menus {
         You are walking a corridor that only goes one way. Pick an archetype, carry up to five spells,
         and see how far down you get before something in the dark is faster than your cooldowns.
       </p>
-      <div class="keys">
-        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <b>move</b></span>
-        <span><kbd>Mouse</kbd> <b>look</b></span>
-        <span><kbd>Click</kbd> / <kbd>Space</kbd> <b>cast</b></span>
-        <span><kbd>1</kbd>–<kbd>5</kbd> / <kbd>Wheel</kbd> <b>select spell</b></span>
-        <span><kbd>Shift</kbd> <b>sprint</b></span>
-        <span><kbd>Esc</kbd> <b>pause</b></span>
-      </div>
+      ${controlHints()}
       <div class="row"><button class="btn" id="startBtn">Enter the corridor</button></div>
     `);
     this.el.querySelector('#startBtn').onclick = onStart;
@@ -151,13 +167,7 @@ export class Menus {
         <button class="btn ghost" id="muteBtn">${muted ? 'Sound: off' : 'Sound: on'}</button>
         <button class="btn ghost" id="abandonBtn">Abandon run</button>
       </div>
-      <div class="keys">
-        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> <b>move</b></span>
-        <span><kbd>Mouse</kbd> <b>look</b></span>
-        <span><kbd>Click</kbd> / <kbd>Space</kbd> <b>cast</b></span>
-        <span><kbd>1</kbd>–<kbd>5</kbd> / <kbd>Wheel</kbd> <b>select</b></span>
-        <span><kbd>Shift</kbd> <b>sprint</b></span>
-      </div>
+      ${controlHints()}
     `);
     this.el.querySelector('#resumeBtn').onclick = onResume;
     this.el.querySelector('#abandonBtn').onclick = onAbandon;

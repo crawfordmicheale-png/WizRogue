@@ -46,7 +46,8 @@ export class Game {
     this.portalReady = true;
     this.pushLog(`Depth ${this.depth}`, '#9fd8ff');
     if (this.depth === 1) {
-      this.pushLog('Click or Space to cast · 1-5 to switch', '#9d94c4');
+      const touch = typeof document !== 'undefined' && document.body.classList.contains('touch');
+      this.pushLog(touch ? 'Hold ✦ to cast · tap a slot to switch' : 'Click or Space to cast · 1-5 to switch', '#9d94c4');
       this.pushLog('Follow the corridor to the portal', '#9d94c4');
     }
     if (gained > 0) this.pushLog(`Loadout slot ${this.player.unlocked} unlocked`, '#ffd76a');
