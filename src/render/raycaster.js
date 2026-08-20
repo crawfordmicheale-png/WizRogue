@@ -3,6 +3,7 @@ import { T } from '../world/mapgen.js';
 import { clamp } from '../util/rng.js';
 
 const FOG = RENDER.fog;
+const WHITE = [255, 255, 255];
 
 export class Renderer {
   constructor(canvas, tex) {
@@ -202,6 +203,7 @@ export class Renderer {
       const alpha = (s.alpha === undefined ? 1 : s.alpha);
       const tint = s.tint;
       const flash = s.flash || 0;
+      const flashC = s.flashColor || WHITE;
 
       for (let x = x0; x <= x1; x++) {
         if (ty >= zbuf[x]) continue;
@@ -213,7 +215,11 @@ export class Renderer {
           if (a < 0.02) continue;
           let sr = (c & 255) * lit, sg = ((c >> 8) & 255) * lit, sb = ((c >> 16) & 255) * lit;
           if (tint) { sr *= tint[0] / 255; sg *= tint[1] / 255; sb *= tint[2] / 255; }
-          if (flash) { sr += (255 - sr) * flash; sg += (255 - sg) * flash; sb += (255 - sb) * flash; }
+          if (flash) {
+            sr += (flashC[0] - sr) * flash;
+            sg += (flashC[1] - sg) * flash;
+            sb += (flashC[2] - sb) * flash;
+          }
           const di = y * w + x;
           const d = buf[di];
           const dr = d & 255, dg = (d >> 8) & 255, db = (d >> 16) & 255;

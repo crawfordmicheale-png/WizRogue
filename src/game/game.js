@@ -681,7 +681,10 @@ export class Game {
         tex: frames[idx],
         creature: true,
         tint,
-        flash: Math.max(e.hitFlash > 0 ? 0.75 : 0, e.windup > 0 ? 0.3 : 0),
+        // A hit reads as a bright pulse, a wind-up as a red one — neither
+        // should erase the creature you are trying to look at.
+        flash: e.hitFlash > 0 ? 0.5 : (e.windup > 0 ? 0.34 : 0),
+        flashColor: e.hitFlash > 0 ? undefined : [255, 110, 110],
       });
     }
 

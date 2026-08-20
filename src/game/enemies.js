@@ -92,7 +92,7 @@ export class Enemy {
     const amp = this.effects.shock > 0 ? 1 + this.effects.shockAmp : 1;
     const dealt = amount * amp;
     this.hp -= dealt;
-    this.hitFlash = 0.12;
+    this.hitFlash = 0.09;
     this.awake = true;
     if (this.encounter && !this.encounter.triggered) game.triggerEncounter(this.encounter);
     if (!opts.silent) game.spawnHitBurst(this.x, this.y, this.z, opts.color || [255, 220, 180], 5);
