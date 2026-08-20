@@ -30,6 +30,25 @@ Then open <http://localhost:8080>. Click the canvas to capture the mouse.
 | Sprint | `Shift` |
 | Pause | `Esc` |
 
+On a phone or tablet the game switches to touch controls automatically (append
+`?touch` to the URL to force them): the left half of the screen is a floating
+movement stick (push it to the edge to sprint), dragging the right half looks
+around, the big round button casts the selected spell, and tapping a loadout
+slot selects it. A left-handed layout, vibration and aim assist live in
+Settings.
+
+Gamepads work too (standard mapping): left stick moves, right stick looks,
+`A`/`RT` casts, `LB`/`RB` cycle spells, `LT`/`L3` sprints, `Start` pauses.
+
+The title screen also offers a **daily corridor** — one shared seed per UTC
+day — and remembers your deepest descent. Daily results can be copied to the
+clipboard from the death screen to compare with friends. The game is an
+installable PWA and keeps working offline once loaded.
+
+A run in progress is snapshotted at the start of every depth. If the tab is
+closed (or the game crashes), the title screen offers to **continue** from the
+top of the floor you were on; dying or abandoning clears the save.
+
 ## The run
 
 * **Five archetypes.** Pyromancer, Cryomancer, Stormcaller, Plaguebinder and Arcanist —
@@ -42,8 +61,20 @@ Then open <http://localhost:8080>. Click the canvas to capture the mouse.
   empowered twice, which raises its damage and lowers its cost.
 * **Clear a depth, take a boon.** Three cards after every level: a new spell, an empowerment,
   or a permanent stat gain.
-* **Every fifth depth is a Corridor Warden** — a boss with both a melee slam and a spread
-  volley, guarding the portal.
+* **Spell synergies.** Status effects interact: a heavy blow *shatters* a chilled target for
+  bonus damage, a foe both burning and poisoned takes extra damage from everything
+  (*conflagrate*), and shock *arcs* to the nearest enemy when its host dies (*conduction*).
+* **Elites.** From depth 3, packs can include Swift, Stoneskin, Vampiric or Volatile elites —
+  bigger, tinted, always worth a pickup, and each with a twist (Volatiles explode on death).
+* **Biomes.** Every five depths the corridor changes region — Catacombs, Rust Vaults, Frozen
+  Reach, Living Rot, Void Beneath — each with its own colour cast and fog.
+* **Every fifth depth is a Warden** — a boss guarding the portal. The classic Corridor Warden
+  slams and fires spread volleys; from depth 10 you may instead meet the Warden of the Veil,
+  a blinking caster with homing bursts.
+
+The audio is fully synthesised, including a generative ambient score: a drone whose root note
+sinks as you descend, a pulse that kicks in when an arena seals, and a motif for the Wardens.
+Enemy sounds are positional — pan and volume follow direction and distance.
 
 Death ends the run. There is no meta-progression to grind; the next run starts clean.
 
@@ -74,10 +105,13 @@ all generator invariants hold
 
 ```
 index.html            shell: canvas, HUD, overlay
-styles.css            HUD and menu styling
+styles.css            HUD, touch controls and menu styling
+sw.js                 service worker: offline cache
+manifest.webmanifest  PWA install metadata
 src/
   main.js             app state machine and the frame loop
   config.js           tuning knobs
+  settings.js         persisted preferences, best-run record, daily seed, run save
   util/rng.js         seeded mulberry32 RNG and math helpers
   world/mapgen.js     linear corridor generation, seals, lightmap
   render/
@@ -91,10 +125,12 @@ src/
     archetypes.js     starting kits
     rewards.js        post-depth boon selection
   ui/
-    input.js          keyboard, mouse, pointer lock
-    audio.js          WebAudio synthesis — no audio files
+    input.js          keyboard, mouse, gamepad, pointer lock
+    touch.js          virtual stick, look drag, cast button
+    audio.js          WebAudio synthesis: effects, generative music, positional pan
+    haptics.js        vibration on phones
     hud.js            live HUD
-    menus.js          title, archetype select, rewards, pause, death
+    menus.js          title, archetype select, rewards, pause, death, settings
 test/smoke.mjs        generator invariants
 ```
 

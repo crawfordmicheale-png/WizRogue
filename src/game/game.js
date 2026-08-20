@@ -4,7 +4,9 @@ import { Enemy, collides } from './enemies.js';
 import { SPELLS, spellStats, schoolColor } from './spells.js';
 import { getArchetype } from './archetypes.js';
 import { clamp, angleDelta } from '../util/rng.js';
-import { PLAYER } from '../config.js';
+import { PLAYER, biomeForDepth } from '../config.js';
+import { settings } from '../settings.js';
+import { buzz } from '../ui/haptics.js';
 
 const SPRITE_SCALE = 1.7;
 
@@ -28,33 +30,70 @@ export class Game {
     this.runKills = 0;
     this.runTime = 0;
     this.log.length = 0;
+    this.lastHitBy = null;
+    this.synergySeen = {};
+    this.hitMarker = 0;
     this.nextDepth();
+  }
+
+  // Resume a run saved at the top of a floor: rebuild that depth from the seed
+  // (levels are deterministic), then lay the saved player state back on top.
+  restoreRun(save) {
+    this.seed = save.seed >>> 0;
+    this.archetype = getArchetype(save.archetypeId);
+    this.player = new Player(this.archetype);
+    this.depth = save.depth - 1;
+    this.runKills = save.runKills || 0;
+    this.runTime = save.runTime || 0;
+    this.log.length = 0;
+    this.lastHitBy = null;
+    this.synergySeen = {};
+    this.hitMarker = 0;
+    this.nextDepth();
+    const p = this.player;
+    const s = save.player;
+    p.maxHealth = s.maxHealth; p.health = s.health;
+    p.maxMana = s.maxMana; p.mana = s.mana;
+    p.regen = s.regen; p.speedMul = s.speedMul;
+    p.kills = s.kills || 0;
+    p.mods = { ...p.mods, ...s.mods, schoolBonus: { ...(s.mods?.schoolBonus || {}) } };
+    p.slots = s.slots.map((entry) => (entry ? { ...entry } : null));
+    if (!p.slots[p.selected]) p.cycle(1);
+    this.pushLog('You pick up where the corridor left you', '#9d94c4');
   }
 
   nextDepth() {
     this.depth++;
     const gained = this.player.unlockSlotsFor(this.depth);
+    const biome = biomeForDepth(this.depth);
+    const newBiome = biome !== this.biome;
+    this.biome = biome;
     this.level = generateLevel((this.seed + this.depth * 7919) >>> 0, this.depth);
     this.enemies = [];
     this.projectiles = [];
     this.particles = [];
     this.beams = [];
+    this.corpses = [];
+    this.floaters = [];
+    this.lightUndo = [];   // indices into the old level's lightmap are now invalid
     this.player.placeAt(this.level.spawn);
     this.player.shake = 0;
     for (const w of this.level.wanderers) this.spawn(w.id, w.x, w.y, null);
     this.state = 'playing';
     this.portalReady = true;
     this.pushLog(`Depth ${this.depth}`, '#9fd8ff');
+    if (newBiome && this.depth > 1) this.pushLog(`You descend into ${biome.name}`, '#b9a8ff');
     if (this.depth === 1) {
-      this.pushLog('Click or Space to cast · 1-5 to switch', '#9d94c4');
+      const touch = typeof document !== 'undefined' && document.body.classList.contains('touch');
+      this.pushLog(touch ? 'Hold ✦ to cast · tap a slot to switch' : 'Click or Space to cast · 1-5 to switch', '#9d94c4');
       this.pushLog('Follow the corridor to the portal', '#9d94c4');
     }
     if (gained > 0) this.pushLog(`Loadout slot ${this.player.unlocked} unlocked`, '#ffd76a');
     this.hooks.onDepth?.(this.depth);
   }
 
-  spawn(typeId, x, y, encounter) {
-    const e = new Enemy(typeId, x, y, this.depth);
+  spawn(typeId, x, y, encounter, elite = null) {
+    const e = new Enemy(typeId, x, y, this.depth, elite);
     e.encounter = encounter;
     this.enemies.push(e);
     return e;
@@ -74,17 +113,33 @@ export class Game {
     const p = this.player;
 
     p.update(dt, input, this.level);
+    if ((input.touch || input.padActive) && settings.aimAssist) this.aimAssist(dt);
     this.handleInput(input);
     this.updateEncounters();
 
     for (const e of this.enemies) e.update(dt, this);
     this.updateProjectiles(dt);
     this.updateParticles(dt);
+    this.updateCorpses(dt);
+    this.updateFloaters(dt);
+    this.updateDynamicLight();
     this.updatePickups();
+    if (this.hitMarker > 0) this.hitMarker -= dt;
     this.enemies = this.enemies.filter((e) => !e.dead);
 
     if (p.health <= 0) this.die();
     else this.checkPortal();
+  }
+
+  // Thumbs and sticks cannot aim like a mouse, so the view leans gently toward
+  // the nearest enemy already close to the crosshair. Never snaps, never fights
+  // an intentional turn — the pull per frame is a fraction of the error.
+  aimAssist(dt) {
+    const p = this.player;
+    const target = this.nearestEnemyInCone(p.x, p.y, p.angle, 11, 0.42);
+    if (!target || !this.hasLineOfSight(p.x, p.y, target.x, target.y)) return;
+    const err = angleDelta(p.angle, Math.atan2(target.y - p.y, target.x - p.x));
+    p.angle += clamp(err, -1, 1) * Math.min(0.3, dt * 2.5);
   }
 
   handleInput(input) {
@@ -114,7 +169,7 @@ export class Game {
     if (enc.triggered) return;
     enc.triggered = true;
     enc.spawns.forEach((s, i) => {
-      const e = this.spawn(s.id, s.x, s.y, enc);
+      const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
       e.readyIn = i * 0.35 + Math.random() * 0.4;
     });
     for (const seal of enc.seals) {
@@ -156,7 +211,20 @@ export class Game {
       time: this.runTime,
       archetype: this.archetype.name,
       seed: this.seed,
+      killedBy: this.lastHitBy,
     });
+  }
+
+  // First time each synergy fires in a run, name it so the player learns the rule.
+  synergyHint(key) {
+    if (this.synergySeen?.[key]) return;
+    this.synergySeen[key] = true;
+    const text = {
+      shatter: 'Shatter! Heavy blows break chilled foes',
+      conflagrate: 'Conflagrate! Rot fuels fire for bonus damage',
+      conduction: 'Conduction! Shock arcs onward when its host dies',
+    }[key];
+    if (text) this.pushLog(text, '#9fd8ff');
   }
 
   // --- casting ------------------------------------------------------------
@@ -191,8 +259,34 @@ export class Game {
       case 'cone': this.castCone(s); break;
       case 'self': this.castSelf(s); break;
     }
+    if (s.kind === 'bolt' || s.kind === 'beam' || s.kind === 'cone') {
+      this.spawnMuzzleBurst(p.castColor);
+    }
     this.audio?.castSound(s);
+    buzz(8);
     return true;
+  }
+
+  // A handful of sparks thrown forward from the hands at the moment of release,
+  // so every cast has a visible point of origin.
+  spawnMuzzleBurst(color) {
+    const p = this.player;
+    const m = this.muzzle();
+    for (let i = 0; i < 7; i++) {
+      const a = p.angle + (Math.random() - 0.5) * 0.9;
+      const sp = 1.5 + Math.random() * 3;
+      this.particles.push({
+        x: m.x, y: m.y, z: m.z + (Math.random() - 0.5) * 0.12,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (Math.random() - 0.2) * 1.2,
+        life: 0.12 + Math.random() * 0.14, maxLife: 0.26,
+        color, size: 0.1 + Math.random() * 0.14, additive: true,
+      });
+    }
+    // One short-lived flash quad right at the muzzle.
+    this.particles.push({
+      x: m.x, y: m.y, z: m.z, vx: 0, vy: 0, vz: 0,
+      life: 0.09, maxLife: 0.09, color, size: 0.7, additive: true,
+    });
   }
 
   muzzle() {
@@ -250,6 +344,12 @@ export class Game {
     const p = this.player;
     const color = schoolColor(s.id);
     this.spawnRing(p.x, p.y, 0.5, s.range, color);
+    this.spawnRing(p.x, p.y, 0.25, s.range * 0.55, color);
+    // Ground flash under the caster sells the detonation.
+    this.particles.push({
+      x: p.x, y: p.y, z: 0.1, vx: 0, vy: 0, vz: 0,
+      life: 0.16, maxLife: 0.16, color, size: s.range * 0.9, additive: true,
+    });
     this.player.shake = Math.min(1, this.player.shake + 0.35);
     for (const e of this.enemies) {
       if (e.dead) continue;
@@ -295,10 +395,12 @@ export class Game {
       p.heal(s.heal);
       this.pushLog(`+${s.heal} vitality`, '#8affc4');
       this.spawnRing(p.x, p.y, 0.3, 1.4, [120, 255, 200]);
+      this.spawnAura([120, 255, 200]);
     } else if (s.effect === 'shield') {
       p.shield = s.shield;
       p.shieldTime = s.time;
       this.spawnRing(p.x, p.y, 0.3, 1.2, [120, 255, 220]);
+      this.spawnAura([120, 255, 220]);
       this.pushLog(`Ward: ${s.shield}`, '#78ffdc');
     } else if (s.effect === 'blink') {
       const steps = 24;
@@ -332,8 +434,9 @@ export class Game {
       r: 0.22, dmg: r.dmg * enemy.type.dmgMul, friendly: false,
       life: 5, color: r.color || [255, 120, 120], size: 0.3,
       homing: r.homing || 0,
+      ownerName: enemy.name,   // the shooter may be dead by the time this lands
     });
-    this.audio?.play('enemyShot');
+    this.audio?.play('enemyShot', { x: enemy.x, y: enemy.y });
   }
 
   updateProjectiles(dt) {
@@ -380,7 +483,7 @@ export class Game {
             break;
           }
         } else if (Math.hypot(p.x - b.x, p.y - b.y) < p.radius + b.r) {
-          this.damagePlayer(b.dmg, null);
+          this.damagePlayer(b.dmg, b.ownerName);
           this.impact(b, null);
           alive = false;
         }
@@ -409,15 +512,29 @@ export class Game {
     }
     if (spell && spell.blast) {
       this.explode(b.x, b.y, spell, color, enemy);
-      this.audio?.play('boom');
+      this.audio?.play('boom', { x: b.x, y: b.y });
     } else {
       this.spawnHitBurst(b.x, b.y, b.z, color, 7);
-      this.audio?.play(b.friendly ? 'impact' : 'playerHit');
+      // Brief flash quad at the point of impact.
+      this.particles.push({
+        x: b.x, y: b.y, z: b.z, vx: 0, vy: 0, vz: 0,
+        life: 0.1, maxLife: 0.1, color, size: 0.85, additive: true,
+      });
+      this.audio?.play(b.friendly ? 'impact' : 'playerHit', b.friendly ? { x: b.x, y: b.y } : null);
     }
   }
 
   explode(x, y, spell, color, skip) {
     this.spawnRing(x, y, 0.3, spell.blast, color);
+    // Core flash bigger than the ring so a detonation lights the corridor.
+    this.particles.push({
+      x, y, z: 0.5, vx: 0, vy: 0, vz: 0,
+      life: 0.14, maxLife: 0.14, color, size: spell.blast * 0.9, additive: true,
+    });
+    this.particles.push({
+      x, y, z: 0.5, vx: 0, vy: 0, vz: 0,
+      life: 0.08, maxLife: 0.08, color: [255, 255, 255], size: spell.blast * 0.45, additive: true,
+    });
     const p = this.player;
     if (Math.hypot(p.x - x, p.y - y) < spell.blast * 0.8) p.shake = Math.min(1.2, p.shake + 0.4);
     for (const e of this.enemies) {
@@ -495,8 +612,13 @@ export class Game {
 
   damagePlayer(amount, source) {
     const dealt = this.player.takeDamage(amount);
-    if (dealt > 0) this.audio?.play('hurt');
-    void source;
+    if (dealt > 0) {
+      this.audio?.play('hurt');
+      buzz(28);
+      // Remember the killer for the death recap. Accepts an enemy or a name,
+      // since projectiles can outlive whoever fired them.
+      if (source) this.lastHitBy = typeof source === 'string' ? source : source.name;
+    }
   }
 
   shovePlayer(dx, dy, force) {
@@ -514,7 +636,7 @@ export class Game {
       this.spawnHitBurst(enemy.x, enemy.y, enemy.z, [190, 110, 255], 10);
       enemy.x = nx; enemy.y = ny;
       this.spawnHitBurst(nx, ny, enemy.z, [190, 110, 255], 10);
-      this.audio?.play('blink');
+      this.audio?.play('blink', { x: nx, y: ny });
       return;
     }
   }
@@ -522,14 +644,59 @@ export class Game {
   onEnemyDeath(enemy) {
     this.runKills++;
     this.player.kills++;
-    this.audio?.play(enemy.type.boss ? 'bossDeath' : 'kill');
+    this.audio?.play(enemy.type.boss ? 'bossDeath' : 'kill', { x: enemy.x, y: enemy.y });
+    buzz(enemy.type.boss ? [40, 50, 90] : 12);
     this.spawnHitBurst(enemy.x, enemy.y, enemy.z, [255, 190, 140], enemy.type.boss ? 40 : 14);
+
+    // Conduction: shock does not die with its host — it arcs to the nearest foe.
+    if (enemy.effects.shock > 0) {
+      const next = this.nearestEnemy(enemy.x, enemy.y, 3.5, new Set([enemy.id]));
+      if (next) {
+        next.effects.shock = Math.max(next.effects.shock, enemy.effects.shock);
+        next.effects.shockAmp = Math.max(next.effects.shockAmp, enemy.effects.shockAmp);
+        this.spawnBeam({ x: enemy.x, y: enemy.y, z: enemy.z }, { x: next.x, y: next.y, z: next.z }, [255, 235, 130]);
+        this.audio?.play('zap', { x: next.x, y: next.y });
+        this.synergyHint('conduction');
+      }
+    }
+
+    // Volatile elites go out with a bang that hurts everyone nearby.
+    if (enemy.elite?.explode) {
+      const bx = enemy.x, by = enemy.y;
+      this.spawnRing(bx, by, 0.4, 2.2, [255, 170, 80]);
+      this.particles.push({
+        x: bx, y: by, z: 0.5, vx: 0, vy: 0, vz: 0,
+        life: 0.14, maxLife: 0.14, color: [255, 180, 90], size: 2, additive: true,
+      });
+      this.audio?.play('boom', { x: bx, y: by });
+      const p = this.player;
+      const pd = Math.hypot(p.x - bx, p.y - by);
+      if (pd < 2.4 && this.hasLineOfSight(bx, by, p.x, p.y)) {
+        this.damagePlayer((12 + this.depth * 1.5) * (1 - pd / 3), 'a Volatile death-burst');
+      }
+      for (const other of this.enemies) {
+        if (other.dead || other === enemy) continue;
+        const d = Math.hypot(other.x - bx, other.y - by);
+        if (d < 2.4) other.damage((14 + this.depth) * (1 - d / 3), this, { color: [255, 170, 80] });
+      }
+    }
+    // Leave a dissolving corpse so the body doesn't just vanish mid-frame.
+    const frames = this.tex?.sprites[enemy.type.sprite];
+    if (frames) {
+      this.corpses.push({
+        x: enemy.x, y: enemy.y, z: enemy.z,
+        size: enemy.height * SPRITE_SCALE,
+        tex: frames[0],
+        hover: !!enemy.type.hover,
+        t: 0, dur: enemy.type.boss ? 0.9 : 0.5,
+      });
+    }
     if (enemy.type.boss) {
-      this.pushLog('The Warden falls', '#ffd76a');
+      this.pushLog(`The ${enemy.name} falls`, '#ffd76a');
       this.player.shake = 1;
     }
-    // Small chance of a drop so long fights stay sustainable.
-    if (Math.random() < (enemy.type.boss ? 1 : 0.16)) {
+    // Small chance of a drop so long fights stay sustainable; elites always pay out.
+    if (Math.random() < (enemy.type.boss || enemy.elite ? 1 : 0.16)) {
       this.level.props.push({
         kind: Math.random() < 0.5 ? 'health' : 'mana',
         x: enemy.x, y: enemy.y, z: 0.35, phase: 0, taken: false,
@@ -586,18 +753,44 @@ export class Game {
 
   spawnBeam(from, to, color) {
     const dx = to.x - from.x, dy = to.y - from.y;
-    const dz = (to.z === undefined ? 0.5 : to.z) - (from.z === undefined ? 0.5 : from.z);
+    const fz = from.z === undefined ? 0.5 : from.z;
+    const dz = (to.z === undefined ? 0.5 : to.z) - fz;
     const dist = Math.hypot(dx, dy);
-    const n = Math.max(4, Math.round(dist * 7));
+    const n = Math.max(6, Math.round(dist * 10));
     for (let i = 0; i <= n; i++) {
       const t = i / n;
+      const px = from.x + dx * t, py = from.y + dy * t, pz = fz + dz * t;
+      // Coloured sheath around a white-hot core, with the far end lingering a
+      // touch longer so the beam reads as travelling outward.
       this.particles.push({
-        x: from.x + dx * t + (Math.random() - 0.5) * 0.08,
-        y: from.y + dy * t + (Math.random() - 0.5) * 0.08,
-        z: (from.z === undefined ? 0.5 : from.z) + dz * t + (Math.random() - 0.5) * 0.06,
-        vx: 0, vy: 0, vz: 0.15,
-        life: 0.14 + Math.random() * 0.1, maxLife: 0.24,
-        color, size: 0.28, additive: true,
+        x: px + (Math.random() - 0.5) * 0.1,
+        y: py + (Math.random() - 0.5) * 0.1,
+        z: pz + (Math.random() - 0.5) * 0.08,
+        vx: 0, vy: 0, vz: 0.18,
+        life: 0.12 + t * 0.07 + Math.random() * 0.08, maxLife: 0.27,
+        color, size: 0.3, additive: true,
+      });
+      if ((i & 1) === 0) {
+        this.particles.push({
+          x: px, y: py, z: pz, vx: 0, vy: 0, vz: 0.1,
+          life: 0.1 + t * 0.05, maxLife: 0.15,
+          color: [255, 255, 255], size: 0.13, additive: true,
+        });
+      }
+    }
+  }
+
+  // Rising motes around the caster for heals and wards.
+  spawnAura(color) {
+    const p = this.player;
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 0.35 + Math.random() * 0.4;
+      this.particles.push({
+        x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r, z: 0.1 + Math.random() * 0.3,
+        vx: 0, vy: 0, vz: 0.9 + Math.random() * 0.7,
+        life: 0.45 + Math.random() * 0.35, maxLife: 0.8,
+        color, size: 0.09 + Math.random() * 0.1, additive: true,
       });
     }
   }
@@ -613,7 +806,7 @@ export class Game {
         life: 0.16, maxLife: 0.16, color: [255, 120, 120], size: 0.22, additive: true,
       });
     }
-    this.audio?.play('swipe');
+    this.audio?.play('swipe', { x: enemy.x, y: enemy.y });
   }
 
   updateParticles(dt) {
@@ -631,6 +824,91 @@ export class Game {
       out.push(q);
     }
     this.particles = out;
+  }
+
+  updateCorpses(dt) {
+    if (!this.corpses.length) return;
+    const out = [];
+    for (const c of this.corpses) {
+      c.t += dt;
+      if (c.t < c.dur) out.push(c);
+    }
+    this.corpses = out;
+  }
+
+  // --- floating damage numbers ---------------------------------------------
+
+  addDamageNumber(enemy, amount, color) {
+    if (amount < 1) return;
+    // Rapid hits on the same target merge so beams don't paper the screen.
+    for (const f of this.floaters) {
+      if (f.key === enemy.id && f.t < 0.35) {
+        f.value += amount;
+        f.t = Math.min(f.t, 0.15);
+        return;
+      }
+    }
+    this.floaters.push({
+      key: enemy.id,
+      x: enemy.x + (Math.random() - 0.5) * 0.3,
+      y: enemy.y + (Math.random() - 0.5) * 0.3,
+      z: enemy.z + enemy.height * 0.55,
+      value: amount,
+      color: color || [255, 235, 200],
+      t: 0, life: 0.8,
+    });
+    if (this.floaters.length > 24) this.floaters.shift();
+  }
+
+  updateFloaters(dt) {
+    if (!this.floaters.length) return;
+    const out = [];
+    for (const f of this.floaters) {
+      f.t += dt;
+      f.z += dt * 0.55;
+      if (f.t < f.life) out.push(f);
+    }
+    this.floaters = out;
+  }
+
+  // --- dynamic light ---------------------------------------------------------
+  // Casts and projectiles stamp a temporary boost into the baked lightmap and
+  // undo it next frame, so spells genuinely light the corridor as they travel.
+
+  stampLight(x, y, radius, power) {
+    const level = this.level;
+    const light = level.light;
+    const W = level.w, H = level.h;
+    const x0 = Math.max(0, Math.floor(x - radius)), x1 = Math.min(W - 1, Math.ceil(x + radius));
+    const y0 = Math.max(0, Math.floor(y - radius)), y1 = Math.min(H - 1, Math.ceil(y + radius));
+    for (let cy = y0; cy <= y1; cy++) {
+      for (let cx = x0; cx <= x1; cx++) {
+        const d = Math.hypot(cx + 0.5 - x, cy + 0.5 - y);
+        if (d > radius) continue;
+        const i = cy * W + cx;
+        const f = 1 - d / radius;
+        this.lightUndo.push(i, light[i]);
+        light[i] = Math.min(1.7, light[i] + power * f * f);
+      }
+    }
+  }
+
+  updateDynamicLight() {
+    if (!this.tex) return; // headless sim doesn't render
+    const light = this.level.light;
+    // Reverse order: overlapping stamps on one cell must unwind last-to-first.
+    for (let i = this.lightUndo.length - 2; i >= 0; i -= 2) {
+      light[this.lightUndo[i]] = this.lightUndo[i + 1];
+    }
+    this.lightUndo.length = 0;
+
+    const p = this.player;
+    if (p.castFlash > 0) this.stampLight(p.x, p.y, 4, p.castFlash * 0.65);
+    let budget = 14;
+    for (const b of this.projectiles) {
+      if (budget-- <= 0) break;
+      this.stampLight(b.x, b.y, 2.6, b.friendly ? 0.5 : 0.35);
+    }
   }
 
   // --- render feed --------------------------------------------------------
@@ -674,6 +952,8 @@ export class Game {
       if (e.effects.chill > 0) tint = [150, 210, 255];
       else if (e.effects.poison > 0) tint = [190, 255, 150];
       else if (e.effects.burn > 0) tint = [255, 190, 150];
+      else if (e.elite) tint = e.elite.tint;
+      else if (e.type.tintBase) tint = e.type.tintBase;
       out.push({
         x: e.x, y: e.y,
         z: e.z + (e.type.hover ? Math.sin(e.bob) * 0.09 : 0),
@@ -688,11 +968,32 @@ export class Game {
       });
     }
 
+    // Dissolving corpses: sink, shrink and fade.
+    for (const c of this.corpses) {
+      const k = c.t / c.dur;
+      out.push({
+        x: c.x, y: c.y,
+        z: c.z - k * (c.hover ? 0.5 : 0.28),
+        w: c.size * (1 - k * 0.25), h: c.size * (1 - k * 0.45),
+        tex: c.tex,
+        creature: true,
+        alpha: 1 - k * k,
+        tint: [200 - k * 110, 170 - k * 110, 220 - k * 90],
+      });
+    }
+
+    // Bolts are a coloured glow around a white-hot core, with a subtle pulse.
     for (const b of this.projectiles) {
+      const pulse = 1 + Math.sin(time * 16 + b.x * 5 + b.y * 3) * 0.14;
       out.push({
         x: b.x, y: b.y, z: b.z,
-        w: b.size * 2.2, h: b.size * 2.2,
+        w: b.size * 2.6 * pulse, h: b.size * 2.6 * pulse,
         tex: this.tex.glow, tint: b.color, additive: true,
+      });
+      out.push({
+        x: b.x, y: b.y, z: b.z,
+        w: b.size * 1.05, h: b.size * 1.05,
+        tex: this.tex.glow, tint: [255, 255, 255], additive: true,
       });
     }
 

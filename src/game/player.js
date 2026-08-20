@@ -2,6 +2,7 @@ import { PLAYER, slotsForDepth } from '../config.js';
 import { clamp } from '../util/rng.js';
 import { spellStats } from './spells.js';
 import { collides } from './enemies.js';
+import { settings } from '../settings.js';
 
 export class Player {
   constructor(archetype) {
@@ -122,20 +123,21 @@ export class Player {
     for (let i = 0; i < 5; i++) if (this.cooldowns[i] > 0) this.cooldowns[i] -= dt;
 
     // --- look ---
-    this.angle += input.lookX * PLAYER.mouseSens;
-    this.pitch = clamp(this.pitch - input.lookY * PLAYER.mouseSens * 0.85, -PLAYER.pitchLimit, PLAYER.pitchLimit);
+    const sens = PLAYER.mouseSens * settings.sens;
+    this.angle += input.lookX * sens;
+    this.pitch = clamp(this.pitch - input.lookY * sens * 0.85, -PLAYER.pitchLimit, PLAYER.pitchLimit);
     input.consumeLook();
 
     // --- ground movement with a little inertia ---
-    const fwd = (input.down('forward') ? 1 : 0) - (input.down('back') ? 1 : 0);
-    const strafe = (input.down('right') ? 1 : 0) - (input.down('left') ? 1 : 0);
+    // Axes are analog: keys give ±1, the touch stick anything in between.
+    const axes = input.moveAxes();
     const sprint = input.down('sprint') ? PLAYER.sprintMul : 1;
     const target = PLAYER.speed * this.speedMul * sprint;
     const cos = Math.cos(this.angle), sin = Math.sin(this.angle);
-    let dx = cos * fwd - sin * strafe;
-    let dy = sin * fwd + cos * strafe;
+    let dx = cos * axes.f - sin * axes.s;
+    let dy = sin * axes.f + cos * axes.s;
     const len = Math.hypot(dx, dy);
-    if (len > 0.001) { dx /= len; dy /= len; }
+    if (len > 1) { dx /= len; dy /= len; }
 
     const accel = PLAYER.accel * dt;
     this.vx += (dx * target - this.vx) * Math.min(1, accel);

@@ -33,7 +33,25 @@ export const ENEMY_TYPES = {
     ranged: { dmg: 16, speed: 8, cd: 3.2, range: 16, windup: 0.7, burst: 5, spread: 0.42, color: [255, 90, 120] },
     aggro: 30, sprite: 'warden', mass: 8, boss: true,
   },
+  // Deep-floor variant: a blinking caster that refuses to be cornered.
+  wardenVeil: {
+    name: 'Warden of the Veil', hp: 400, speed: 2.1, radius: 0.58, height: 1.85, z: 0.95,
+    ranged: { dmg: 13, speed: 7, cd: 2.4, range: 17, windup: 0.6, burst: 3, spread: 0.2, homing: 1.3, color: [190, 130, 255] },
+    keepAway: 6, teleport: 5, aggro: 30, sprite: 'warden', mass: 6, boss: true,
+    tintBase: [205, 160, 255],
+  },
 };
+
+// Elite modifiers rolled by the level generator on deeper floors. An elite is
+// visibly bigger and tinted, always drops a pickup, and carries one twist.
+export const ELITES = {
+  swift:     { name: 'Swift',     tint: [190, 255, 150], hp: 0.9, dmg: 1.25, speed: 1.45 },
+  stoneskin: { name: 'Stoneskin', tint: [185, 185, 210], hp: 2.2, dmg: 1.1, mass: 3 },
+  vampiric:  { name: 'Vampiric',  tint: [255, 130, 160], hp: 1.4, dmg: 1.2, leech: 0.6 },
+  volatile:  { name: 'Volatile',  tint: [255, 180, 100], hp: 1.2, dmg: 1.15, explode: true },
+};
+
+export const ELITE_IDS = Object.keys(ELITES);
 
 export function scaledStats(typeId, depth) {
   const t = ENEMY_TYPES[typeId];
@@ -45,18 +63,29 @@ export function scaledStats(typeId, depth) {
 let nextId = 1;
 
 export class Enemy {
-  constructor(typeId, x, y, depth) {
+  constructor(typeId, x, y, depth, eliteId = null) {
     const s = scaledStats(typeId, depth);
     this.id = nextId++;
     this.typeId = typeId;
     this.type = s;
     this.name = s.name;
+    this.elite = eliteId ? ELITES[eliteId] : null;
+    if (this.elite) {
+      const e = this.elite;
+      s.maxHp = Math.round(s.maxHp * e.hp);
+      s.dmgMul *= e.dmg;
+      if (e.speed) s.speed *= e.speed;
+      if (e.mass) s.mass *= e.mass;
+      this.name = `${e.name} ${s.name}`;
+      s.height *= 1.15;
+    }
     this.x = x; this.y = y;
     this.z = s.z;
     this.radius = s.radius;
     this.height = s.height;
     this.hp = s.maxHp;
     this.maxHp = s.maxHp;
+    this.hpBarTime = 0;
     this.dead = false;
     this.awake = false;
     this.vx = 0; this.vy = 0;          // knockback velocity, decays fast
@@ -89,13 +118,33 @@ export class Enemy {
 
   damage(amount, game, opts = {}) {
     if (this.dead) return 0;
-    const amp = this.effects.shock > 0 ? 1 + this.effects.shockAmp : 1;
-    const dealt = amount * amp;
+    let amp = this.effects.shock > 0 ? 1 + this.effects.shockAmp : 1;
+    // Conflagrate: rot fuels fire — a target both burning and poisoned takes
+    // a quarter more from everything.
+    if (this.effects.burn > 0 && this.effects.poison > 0) {
+      amp *= 1.25;
+      game.synergyHint?.('conflagrate');
+    }
+    let dealt = amount * amp;
+    // Shatter: a heavy blow on a chilled target consumes the chill for +50%.
+    if (this.effects.chill > 0 && dealt >= 22) {
+      dealt *= 1.5;
+      this.effects.chill = 0;
+      this.effects.chillSlow = 0;
+      game.spawnHitBurst(this.x, this.y, this.z, [180, 230, 255], 12);
+      game.audio?.play('shatter', { x: this.x, y: this.y });
+      game.synergyHint?.('shatter');
+    }
     this.hp -= dealt;
     this.hitFlash = 0.09;
+    this.hpBarTime = 1.7;
     this.awake = true;
     if (this.encounter && !this.encounter.triggered) game.triggerEncounter(this.encounter);
-    if (!opts.silent) game.spawnHitBurst(this.x, this.y, this.z, opts.color || [255, 220, 180], 5);
+    if (!opts.silent) {
+      game.spawnHitBurst(this.x, this.y, this.z, opts.color || [255, 220, 180], 5);
+      game.addDamageNumber(this, dealt, opts.color);
+      game.hitMarker = 0.14;
+    }
     if (this.hp <= 0) this.kill(game);
     return dealt;
   }
@@ -125,6 +174,7 @@ export class Enemy {
     if (e.shock > 0) e.shock -= dt; else e.shockAmp = 0;
     if (this.hp <= 0) { this.kill(game); return; }
     if (this.hitFlash > 0) this.hitFlash -= dt;
+    if (this.hpBarTime > 0) this.hpBarTime -= dt;
 
     // --- knockback slide ---
     if (Math.abs(this.vx) > 0.01 || Math.abs(this.vy) > 0.01) {
@@ -232,8 +282,14 @@ export class Enemy {
       const p = game.player;
       const d = Math.hypot(p.x - this.x, p.y - this.y);
       if (d < m.reach + p.radius + 0.35) {
-        game.damagePlayer(m.dmg * this.type.dmgMul, this);
+        const dmg = m.dmg * this.type.dmgMul;
+        game.damagePlayer(dmg, this);
         if (m.knock) game.shovePlayer(p.x - this.x, p.y - this.y, m.knock);
+        // Vampiric elites drink from every landed blow.
+        if (this.elite?.leech) {
+          this.hp = Math.min(this.maxHp, this.hp + dmg * this.elite.leech);
+          game.spawnEmber(this.x, this.y, this.z, [255, 90, 130]);
+        }
       }
       game.spawnSwipe(this, game.player);
     } else if (kind === 'ranged') {

@@ -1,5 +1,6 @@
 import { makeRng } from '../util/rng.js';
 import { MAP } from '../config.js';
+import { ELITE_IDS } from '../game/enemies.js';
 
 export const T = {
   FLOOR: 0,
@@ -238,8 +239,10 @@ function buildLevel(seed, depth) {
       bounds: chamber,
       center: { x: (chamber.x0 + chamber.x1) / 2 + 0.5, y: (chamber.y0 + chamber.y1) / 2 + 0.5 },
       seals: gateSeals,
+      // From depth 10 the seed may swap in the Veil variant: a blinking caster
+      // that fights the room rather than the doorway.
       spawns: [{
-        id: 'warden',
+        id: depth >= 10 && rng.chance(0.5) ? 'wardenVeil' : 'warden',
         x: (chamber.x0 + chamber.x1) / 2 + 0.5,
         y: (chamber.y0 + chamber.y1) / 2 + 0.5,
       }],
@@ -304,8 +307,12 @@ function rollSpawns(rng, depth, bounds, tiles, W, budget) {
     const px = rng.int(bounds.x0, bounds.x1) + 0.5;
     const py = rng.int(bounds.y0, bounds.y1) + 0.5;
     if (tiles[Math.floor(py) * W + Math.floor(px)] !== T.FLOOR) continue;
-    left -= pick.cost;
-    spawns.push({ id: pick.id, x: px, y: py });
+    // Deeper floors sprinkle in elites: rarer members of the pack with a
+    // modifier, worth extra budget so the room does not also fill up.
+    const elite = depth >= 3 && rng.chance(Math.min(0.2, 0.03 + depth * 0.015))
+      ? rng.pick(ELITE_IDS) : null;
+    left -= pick.cost + (elite ? 2 : 0);
+    spawns.push({ id: pick.id, x: px, y: py, elite });
   }
   return spawns;
 }
