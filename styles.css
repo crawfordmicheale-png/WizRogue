@@ -32,12 +32,13 @@ html, body {
 
 ::selection { background: rgba(150, 110, 255, 0.4); }
 
-#game { position: fixed; inset: 0; touch-action: none; }
+#game { position: fixed; inset: 0; }
 
 #view {
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   background: #07060e;
@@ -389,6 +390,7 @@ body.touch .chip { font-size: 10px; padding: 5px 11px; }
     radial-gradient(circle at 50% 45%, rgba(24, 14, 44, 0.84), rgba(4, 3, 10, 0.96));
   backdrop-filter: blur(3px);
   overflow-y: auto;
+  touch-action: pan-y;
   z-index: 5;
 }
 #overlay.on { display: flex; }
