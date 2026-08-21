@@ -63,8 +63,12 @@ export function scaledStats(typeId, depth) {
 let nextId = 1;
 
 export class Enemy {
-  constructor(typeId, x, y, depth, eliteId = null) {
+  constructor(typeId, x, y, depth, eliteId = null, roll = Math.random) {
     const s = scaledStats(typeId, depth);
+    // Every roll that can change the outcome of a fight comes from the run's
+    // seeded stream, so a seeded run replays identically. Cosmetic randomness
+    // (embers, sparks) stays on Math.random and cannot perturb the simulation.
+    this.roll = roll;
     this.id = nextId++;
     this.typeId = typeId;
     this.type = s;
@@ -97,9 +101,9 @@ export class Enemy {
     this.burstTimer = 0;
     this.stun = 0;
     this.hitFlash = 0;
-    this.strafe = Math.random() < 0.5 ? 1 : -1;
+    this.strafe = roll() < 0.5 ? 1 : -1;
     this.strafeTimer = 0;
-    this.bob = Math.random() * 6.28;
+    this.bob = roll() * 6.28;
     this.teleportCd = 3;
     this.effects = { burn: 0, burnDps: 0, poison: 0, poisonDps: 0, chill: 0, chillSlow: 0, shock: 0, shockAmp: 0 };
     this.encounter = null;
@@ -197,7 +201,7 @@ export class Enemy {
     this.attackTimer -= dt;
     this.teleportCd -= dt;
     this.strafeTimer -= dt;
-    if (this.strafeTimer <= 0) { this.strafeTimer = 1 + Math.random() * 1.5; this.strafe = Math.random() < 0.5 ? 1 : -1; }
+    if (this.strafeTimer <= 0) { this.strafeTimer = 1 + this.roll() * 1.5; this.strafe = this.roll() < 0.5 ? 1 : -1; }
 
     // --- resolve a wind-up already in progress ---
     if (this.windup > 0) {
@@ -235,7 +239,7 @@ export class Enemy {
 
     // Warlocks reposition by blinking when crowded.
     if (this.type.teleport && this.teleportCd <= 0 && dist < 4 && los) {
-      this.teleportCd = 6 + Math.random() * 3;
+      this.teleportCd = 6 + this.roll() * 3;
       game.blinkEnemy(this, -toward.x, -toward.y, this.type.teleport);
       return;
     }
@@ -304,7 +308,7 @@ export class Enemy {
     const r = this.type.ranged;
     const p = game.player;
     let ang = Math.atan2(p.y - this.y, p.x - this.x);
-    if (r.spread) ang += (Math.random() - 0.5) * r.spread * 2;
+    if (r.spread) ang += (this.roll() - 0.5) * r.spread * 2;
     game.spawnEnemyProjectile(this, ang, r);
   }
 
