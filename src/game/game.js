@@ -10,6 +10,16 @@ import { buzz } from '../ui/haptics.js';
 
 const SPRITE_SCALE = 1.7;
 
+// What the room tells you as it shuts, so the rule is legible before the first
+// hit lands rather than something you infer from dying to it.
+const ENCOUNTER_OPENING = {
+  boss: 'The Warden stirs',
+  clear: 'The way seals behind you',
+  waves: 'The way seals — something else is coming',
+  holdout: 'The seal is on a clock. Stay alive',
+  dark: 'The torches gutter out',
+};
+
 export class Game {
   constructor(tex, audio, hooks = {}) {
     this.tex = tex;
@@ -146,7 +156,7 @@ export class Game {
     p.update(dt, input, this.level);
     if ((input.touch || input.padActive) && settings.aimAssist) this.aimAssist(dt);
     this.handleInput(input);
-    this.updateEncounters();
+    this.updateEncounters(dt);
 
     for (const e of this.enemies) e.update(dt, this);
     this.updateProjectiles(dt);
@@ -182,45 +192,123 @@ export class Game {
     if (input.down('cast')) this.tryCast(p.selected);
   }
 
-  updateEncounters() {
+  updateEncounters(dt) {
     const p = this.player;
     for (const enc of this.level.encounters) {
-      if (enc.cleared) continue;
+      if (enc.cleared) {
+        if (enc.dimT > 0) this.fadeRoomLight(enc, dt, false);
+        continue;
+      }
       if (!enc.triggered) {
         const b = enc.bounds;
         if (p.x > b.x0 && p.x < b.x1 + 1 && p.y > b.y0 && p.y < b.y1 + 1) this.triggerEncounter(enc);
         continue;
       }
       const alive = this.enemies.some((e) => e.encounter === enc && !e.dead);
-      if (!alive) this.clearEncounter(enc);
+
+      switch (enc.rule) {
+        case 'waves':
+          // Release the next wave on a timer, or early once the room is clear,
+          // so a fight re-reads partway through instead of resolving once.
+          if (enc.pending.length) {
+            enc.waveTimer -= dt;
+            if (enc.waveTimer <= 0 || !alive) this.releaseWave(enc);
+          } else if (!alive) this.clearEncounter(enc);
+          break;
+
+        case 'holdout': {
+          // The seal is on a clock, not a body count. Reinforcements keep
+          // arriving, so clearing the room is not the answer — surviving is.
+          enc.holdFor -= dt;
+          enc.reinforceTimer -= dt;
+          if (enc.reinforceTimer <= 0 && enc.holdFor > 3 && enc.reinforce.length) {
+            const s = enc.reinforce.shift();
+            const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
+            e.readyIn = 0.5;
+            this.spawnHitBurst(s.x, s.y, 0.6, [180, 120, 255], 14);
+            this.audio?.play('seal', { x: s.x, y: s.y });
+            enc.reinforceTimer = 3.4 + this.roll() * 2.2;
+          }
+          if (enc.holdFor <= 0) this.clearEncounter(enc);
+          break;
+        }
+
+        default:
+          if (!alive) this.clearEncounter(enc);
+      }
+
+      if (enc.rule === 'dark') this.fadeRoomLight(enc, dt, true);
+    }
+  }
+
+  // Torches gutter out over a moment rather than snapping off, and come back up
+  // when the seal falls. Scales the room's light at sample time, so it never
+  // collides with the per-frame dynamic light stamps.
+  fadeRoomLight(enc, dt, out) {
+    const target = out ? 1 : 0;
+    enc.dimT = Math.max(0, Math.min(1, enc.dimT + (out ? dt / 1.1 : -dt / 0.9)));
+    if (enc.dimT === target && !out) { this.level.dim = null; return; }
+    const b = enc.bounds;
+    this.level.dim = {
+      x0: b.x0 - 1, y0: b.y0 - 1, x1: b.x1 + 1, y1: b.y1 + 1,
+      factor: 1 - enc.dimT * 0.82,
+    };
+  }
+
+  releaseWave(enc) {
+    const size = Math.max(1, Math.ceil(enc.waveSize));
+    for (let i = 0; i < size && enc.pending.length; i++) {
+      const s = enc.pending.shift();
+      const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
+      e.readyIn = i * 0.3 + this.roll() * 0.4;
+    }
+    enc.waveTimer = 7 + this.roll() * 3;
+    enc.wave++;
+    if (enc.wave > 1) {
+      this.pushLog(`Another wave — ${enc.wave} of ${enc.waves}`, '#ff9a6a');
+      this.audio?.play('seal');
     }
   }
 
   triggerEncounter(enc) {
     if (enc.triggered) return;
     enc.triggered = true;
-    enc.spawns.forEach((s, i) => {
-      const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
-      e.readyIn = i * 0.35 + this.roll() * 0.4;
-    });
+    enc.rule = enc.rule || 'clear';
+    enc.dimT = 0;
+    enc.reinforceTimer = 4;
+
+    if (enc.rule === 'waves') {
+      enc.waves = enc.spawns.length >= 6 ? 3 : 2;
+      enc.wave = 0;
+      enc.waveSize = enc.spawns.length / enc.waves;
+      enc.pending = enc.spawns.slice();
+      this.releaseWave(enc);
+    } else {
+      enc.pending = [];
+      enc.spawns.forEach((s, i) => {
+        const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
+        e.readyIn = i * 0.35 + this.roll() * 0.4;
+      });
+    }
     for (const seal of enc.seals) {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
       if (b && !b.open) b.active = true;
     }
     this.pushClearOfSeals(enc);
     this.audio?.play(enc.kind === 'boss' ? 'boss' : 'seal');
-    this.pushLog(enc.kind === 'boss' ? 'The Warden stirs' : 'The way seals behind you', '#ff9a6a');
+    this.pushLog(ENCOUNTER_OPENING[enc.kind === 'boss' ? 'boss' : enc.rule], '#ff9a6a');
     this.hooks.onEncounter?.(enc);
   }
 
   clearEncounter(enc) {
     enc.cleared = true;
+    enc.pending = [];
     for (const seal of enc.seals) {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
       if (b) { b.active = false; b.open = true; }
     }
     this.audio?.play('unseal');
-    this.pushLog('The seals fall away', '#8affc4');
+    this.pushLog(enc.rule === 'holdout' ? 'You outlasted it — the seals fall away' : 'The seals fall away', '#8affc4');
   }
 
   checkPortal() {

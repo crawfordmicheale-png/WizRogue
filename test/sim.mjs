@@ -6,6 +6,7 @@ import { ARCHETYPES } from '../src/game/archetypes.js';
 import { rollRewards } from '../src/game/rewards.js';
 import { makeRng } from '../src/util/rng.js';
 import { collides } from '../src/game/enemies.js';
+import { ARENA_RULES } from '../src/world/mapgen.js';
 
 const STEP = 1 / 60;
 const MINUTES = Number(process.env.SIM_MINUTES || 6);
@@ -112,6 +113,7 @@ function playRun(archetypeId, seed) {
   let noProgress = false;
   let strafe = 1;
   const stats = { depth: 1, kills: 0, casts: 0, stuckEvents: 0, reanchors: 0, stall: null, embedded: null };
+  const seenRules = stats.rules = {};
   let depthSince = 0, lastDepth = 1;
   let lastLiveHp = -1, lastHealth = -1, stalemate = 0;
   const trail = [];
@@ -133,6 +135,17 @@ function playRun(archetypeId, seed) {
 
     const p = game.player;
     const level = game.level;
+
+    // Record which encounter rules were met and which were actually beaten. A
+    // rule that never clears is a soft-lock waiting for a player to find it.
+    for (const enc of level.encounters) {
+      if (enc.triggered && enc.rule) {
+        (seenRules[enc.rule] ||= { met: 0, cleared: 0 });
+        if (!enc._counted) { seenRules[enc.rule].met++; enc._counted = true; }
+        if (enc.cleared && !enc._countedClear) { seenRules[enc.rule].cleared++; enc._countedClear = true; }
+      }
+    }
+
 
     // --- pick a target -----------------------------------------------------
     let target = null, best = Infinity;
@@ -360,6 +373,22 @@ for (const r of rows) {
   console.log(`\nSTALL ${r.archetype} seed ${r.seed}: ${JSON.stringify(r.stall)}`);
   fail(`${r.archetype} seed ${r.seed}: run stopped progressing at depth ${r.stall.depth} for 100s`);
 }
+// Every rule must have been met and beaten at least once across the sample.
+const ruleTotals = {};
+for (const r of rows) {
+  for (const [rule, c] of Object.entries(r.rules || {})) {
+    const t = (ruleTotals[rule] ||= { met: 0, cleared: 0 });
+    t.met += c.met; t.cleared += c.cleared;
+  }
+}
+console.log('\nencounter rules   met  cleared');
+for (const rule of ARENA_RULES) {
+  const t = ruleTotals[rule] || { met: 0, cleared: 0 };
+  console.log(`${rule.padEnd(17)} ${String(t.met).padEnd(4)} ${t.cleared}`);
+  if (!t.met) fail(`encounter rule "${rule}" never appeared — cannot tell whether it works`);
+  else if (!t.cleared) fail(`encounter rule "${rule}" was met ${t.met}x and never cleared once — it may be unbeatable`);
+}
+
 const maxDepth = Math.max(...rows.map((r) => r.depth));
 const avgDepth = rows.reduce((a, r) => a + r.depth, 0) / rows.length;
 console.log(`\ndeepest run: ${maxDepth}, average: ${avgDepth.toFixed(1)}, cleared depths: ${rows.reduce((a, r) => a + r.clears, 0)}`);
