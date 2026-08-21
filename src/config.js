@@ -49,6 +49,18 @@ export const MAP = {
   maxNodes: 11,
 };
 
+// Difficulty dials. A sealed room's budget is per-wave rather than per-room,
+// because the wave count is the depth: a flat room budget spread over ten waves
+// leaves each one holding less than a single enemy. Since the body count now
+// climbs with depth, per-enemy scaling is gentler than it was — deep floors
+// throw more at you rather than spongier versions of the same thing.
+export const COMBAT = {
+  waveBudget: 3.4,        // enemy-cost budget per wave
+  waveBudgetPerDepth: 0.1,
+  hpPerDepth: 0.06,
+  dmgPerDepth: 0.05,
+};
+
 export function slotsForDepth(depth) {
   let n = 0;
   for (const d of SLOT_UNLOCK_DEPTH) if (depth >= d) n++;

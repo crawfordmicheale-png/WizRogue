@@ -1,5 +1,6 @@
 import { clamp, angleDelta } from '../util/rng.js';
 import { SHATTER_MIN } from './spells.js';
+import { COMBAT } from '../config.js';
 
 // Base stats at depth 1. Everything scales from here.
 export const ENEMY_TYPES = {
@@ -59,8 +60,8 @@ export const ELITE_IDS = Object.keys(ELITES);
 
 export function scaledStats(typeId, depth) {
   const t = ENEMY_TYPES[typeId];
-  const hpMul = 1 + 0.18 * (depth - 1);
-  const dmgMul = 1 + 0.1 * (depth - 1);
+  const hpMul = 1 + COMBAT.hpPerDepth * (depth - 1);
+  const dmgMul = 1 + COMBAT.dmgPerDepth * (depth - 1);
   return { ...t, maxHp: Math.round(t.hp * hpMul), dmgMul };
 }
 

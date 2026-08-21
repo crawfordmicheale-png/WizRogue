@@ -113,7 +113,10 @@ function playRun(archetypeId, seed) {
   let noProgress = false;
   let strafe = 1;
   const stats = { depth: 1, kills: 0, casts: 0, stuckEvents: 0, reanchors: 0, stall: null, embedded: null };
-  const waveStats = stats.waves = { rooms: 0, cleared: 0, wavesRun: 0 };
+  const waveStats = stats.waves = {
+    rooms: 0, cleared: 0, wavesRun: 0,
+    shallow: { spawns: 0, waves: 0 }, deep: { spawns: 0, waves: 0 },
+  };
   let depthSince = 0, lastDepth = 1;
   let lastLiveHp = -1, lastHealth = -1, stalemate = 0;
   const trail = [];
@@ -146,6 +149,24 @@ function playRun(archetypeId, seed) {
         const want = wavesForDepth(game.depth);
         if (enc.waves !== want)
           fail(`${archetypeId} seed ${seed}: depth ${game.depth} room has ${enc.waves} waves, expected ${want}`);
+        // Waves still queued must each hold somebody. A room budget that does
+        // not scale with the wave count produces trailing empty waves, which
+        // release instantly and turn "wave 9 of 10" into a flicker — the counter
+        // keeps climbing while nothing arrives.
+        const empty = enc.queue.filter((g) => g.length === 0).length;
+        if (empty)
+          fail(`${archetypeId} seed ${seed}: depth ${game.depth} room has ${empty} empty wave(s) of ${enc.waves}`);
+        // Emptiness is no longer the failure mode — the generator's top-up makes
+        // that impossible — and a single unlucky room proves nothing, since a
+        // wave of one warlock is a perfectly good wave. What went wrong before
+        // was density falling away with depth: a flat room budget spread over
+        // depth-many waves leaves each deep wave holding one crawler. So compare
+        // shallow rooms against deep ones in aggregate.
+        const band = game.depth <= 3 ? 'shallow' : game.depth >= 7 ? 'deep' : null;
+        if (band) {
+          waveStats[band].spawns += enc.spawns.length;
+          waveStats[band].waves += enc.waves;
+        }
       }
       if (enc.cleared && !enc._countedClear) {
         enc._countedClear = true;
@@ -388,7 +409,18 @@ const waveTotals = rows.reduce((a, r) => ({
   cleared: a.cleared + (r.waves?.cleared || 0),
   wavesRun: a.wavesRun + (r.waves?.wavesRun || 0),
 }), { rooms: 0, cleared: 0, wavesRun: 0 });
-console.log(`\nsealed rooms entered: ${waveTotals.rooms}, cleared: ${waveTotals.cleared}, ` +
+const band = { shallow: { spawns: 0, waves: 0 }, deep: { spawns: 0, waves: 0 } };
+for (const r of rows) for (const k of ['shallow', 'deep']) {
+  band[k].spawns += r.waves?.[k]?.spawns || 0;
+  band[k].waves += r.waves?.[k]?.waves || 0;
+}
+const density = (b) => (b.waves ? b.spawns / b.waves : 0);
+const shallowD = density(band.shallow), deepD = density(band.deep);
+console.log(`\nenemies per wave — shallow (d1-3): ${shallowD.toFixed(2)}, deep (d7+): ${deepD.toFixed(2)}`);
+if (band.deep.waves && deepD < shallowD * 0.7)
+  fail(`deep waves hold ${deepD.toFixed(2)} enemies against ${shallowD.toFixed(2)} in shallow rooms — ` +
+       'the room budget is not tracking the wave count, so deep waves thin out to single enemies');
+console.log(`sealed rooms entered: ${waveTotals.rooms}, cleared: ${waveTotals.cleared}, ` +
   `waves fought: ${waveTotals.wavesRun}` +
   (waveTotals.cleared ? ` (${(waveTotals.wavesRun / waveTotals.cleared).toFixed(1)} per cleared room)` : ''));
 if (!waveTotals.cleared) fail('no sealed room was ever cleared — wave fights may be unbeatable');
