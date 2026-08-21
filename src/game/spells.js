@@ -126,6 +126,94 @@ export const SPELL_IDS = Object.keys(SPELLS);
 export const MAX_RANK = 3;
 
 /** Effective numbers for a spell at a given rank, with caster modifiers applied. */
+// --- reactions ------------------------------------------------------------
+//
+// The three cross-school reactions, described in one place so the cards that
+// advertise them, the log line that names them and the code that fires them
+// cannot drift apart. `needs` are tags produced by spellProvides below.
+
+export const SHATTER_MIN = 22;   // a single blow this large breaks a chilled target
+
+export const SYNERGIES = {
+  conflagrate: {
+    name: 'Conflagrate',
+    needs: ['burn', 'poison'],
+    hint: 'Conflagrate! Rot fuels fire for bonus damage',
+    blurb: 'burning and rotting at once takes a quarter more from everything',
+  },
+  shatter: {
+    name: 'Shatter',
+    needs: ['chill', 'heavy'],
+    hint: 'Shatter! Heavy blows break chilled foes',
+    blurb: 'a heavy blow on a chilled foe lands for half again',
+  },
+  conduction: {
+    name: 'Conduction',
+    needs: ['shock'],
+    hint: 'Conduction! Shock arcs onward when its host dies',
+    blurb: 'shock jumps to the next foe when its host dies',
+  },
+};
+
+/**
+ * What a spell contributes toward a reaction, at the rank it would be held at.
+ * "heavy" uses the largest single hit it can land — a blast that clips a target
+ * at the edge of its radius falls off and may not reach the threshold.
+ */
+export function spellProvides(spellId, rank = 1, mods = {}) {
+  const s = spellStats(spellId, rank, mods);
+  const tags = [];
+  if (s.burn) tags.push('burn');
+  if (s.poison) tags.push('poison');
+  if (s.chill) tags.push('chill');
+  if (s.shock) tags.push('shock');
+  if (Math.max(s.dmg || 0, s.blastDmg || 0) >= SHATTER_MIN) tags.push('heavy');
+  return tags;
+}
+
+/** Every tag a loadout can currently put on a target. */
+export function loadoutTags(slots, mods = {}) {
+  const tags = new Set();
+  for (const entry of slots) {
+    if (!entry) continue;
+    for (const tag of spellProvides(entry.id, entry.rank, mods)) tags.add(tag);
+  }
+  return tags;
+}
+
+/** Which reactions a loadout can already produce. */
+export function activeSynergies(slots, mods = {}) {
+  const tags = loadoutTags(slots, mods);
+  return Object.keys(SYNERGIES).filter((k) => SYNERGIES[k].needs.every((n) => tags.has(n)));
+}
+
+/**
+ * The reaction a spell would newly unlock, and which held spell completes it.
+ * Returns null when it adds nothing the loadout could not already do.
+ */
+export function synergyUnlockedBy(slots, spellId, rank, mods = {}) {
+  const already = new Set(activeSynergies(slots, mods));
+  const have = loadoutTags(slots, mods);
+  const adding = spellProvides(spellId, rank, mods);
+  const after = new Set([...have, ...adding]);
+
+  for (const [key, syn] of Object.entries(SYNERGIES)) {
+    if (already.has(key)) continue;
+    if (!syn.needs.every((n) => after.has(n))) continue;
+    // Name the spell already held that this one pairs with, so the card can say
+    // what it combines with rather than just naming a mechanic.
+    const missing = syn.needs.filter((n) => !adding.includes(n));
+    let partner = null;
+    for (const entry of slots) {
+      if (!entry || entry.id === spellId) continue;
+      const provides = spellProvides(entry.id, entry.rank, mods);
+      if (missing.some((n) => provides.includes(n))) { partner = SPELLS[entry.id].name; break; }
+    }
+    return { key, name: syn.name, blurb: syn.blurb, partner };
+  }
+  return null;
+}
+
 export function spellStats(spellId, rank = 1, mods = {}) {
   const base = SPELLS[spellId];
   const power = 1 + 0.35 * (rank - 1);

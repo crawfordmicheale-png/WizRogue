@@ -6,6 +6,6 @@
   "private": true,
   "scripts": {
     "start": "python3 -m http.server 8080",
-    "test": "node test/smoke.mjs && node test/sim.mjs"
+    "test": "node test/smoke.mjs && node test/synergy.mjs && node test/sim.mjs"
   }
 }
