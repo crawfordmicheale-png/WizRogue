@@ -38,8 +38,10 @@ export const PLAYER = {
   invulnAfterHit: 0.35,
 };
 
-// Loadout slots unlock as you descend; five is the cap.
-export const SLOT_UNLOCK_DEPTH = [1, 1, 3, 5, 7];
+// Loadout slots unlock as you descend; five is the cap. These sat at 3/5/7,
+// which put the fourth and fifth slots at or past the depth most runs ended on —
+// so the five-spell loadout the game is built around was never actually seen.
+export const SLOT_UNLOCK_DEPTH = [1, 1, 2, 4, 6];
 
 export const MAP = {
   size: 96,

@@ -28,15 +28,18 @@ export const ENEMY_TYPES = {
     keepAway: 7, aggro: 15, sprite: 'warlock', mass: 1.4, teleport: 5,
   },
   warden: {
-    name: 'Corridor Warden', hp: 460, speed: 1.9, radius: 0.62, height: 1.9, z: 0.95,
-    melee: { dmg: 26, reach: 1.9, cd: 1.6, windup: 0.5, knock: 9 },
-    ranged: { dmg: 16, speed: 8, cd: 3.2, range: 16, windup: 0.7, burst: 5, spread: 0.42, color: [255, 90, 120] },
+    // A five-shot burst at 16 base was up to 112 damage after the depth-5
+    // multiplier — more than a full health bar from one volley, which is why
+    // no run ever got past this fight.
+    name: 'Corridor Warden', hp: 345, speed: 1.9, radius: 0.62, height: 1.9, z: 0.95,
+    melee: { dmg: 18, reach: 1.9, cd: 1.6, windup: 0.5, knock: 9 },
+    ranged: { dmg: 11, speed: 8, cd: 3.2, range: 16, windup: 0.7, burst: 3, spread: 0.42, color: [255, 90, 120] },
     aggro: 30, sprite: 'warden', mass: 8, boss: true,
   },
   // Deep-floor variant: a blinking caster that refuses to be cornered.
   wardenVeil: {
-    name: 'Warden of the Veil', hp: 400, speed: 2.1, radius: 0.58, height: 1.85, z: 0.95,
-    ranged: { dmg: 13, speed: 7, cd: 2.4, range: 17, windup: 0.6, burst: 3, spread: 0.2, homing: 1.3, color: [190, 130, 255] },
+    name: 'Warden of the Veil', hp: 350, speed: 2.1, radius: 0.58, height: 1.85, z: 0.95,
+    ranged: { dmg: 10, speed: 7, cd: 2.4, range: 17, windup: 0.6, burst: 3, spread: 0.2, homing: 1.3, color: [190, 130, 255] },
     keepAway: 6, teleport: 5, aggro: 30, sprite: 'warden', mass: 6, boss: true,
     tintBase: [205, 160, 255],
   },

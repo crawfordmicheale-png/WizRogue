@@ -6,6 +6,26 @@ import { settings } from '../settings.js';
 const FOG = RENDER.fog;
 const WHITE = [255, 255, 255];
 
+// Tone curve. Light adds up linearly below the knee, then rolls off towards 255
+// asymptotically, so a torch stacked on a fireball blooms instead of clipping to
+// flat white and erasing everything behind it. A lookup table keeps it to one
+// array read per channel in the inner loops, and it doubles as the clamp: values
+// can be summed freely without overflowing a channel into its neighbour.
+const TONE_MAX = 1023;
+const TONE = (() => {
+  const lut = new Uint8Array(TONE_MAX + 1);
+  const knee = 168, room = 255 - knee;
+  for (let v = 0; v <= TONE_MAX; v++) {
+    lut[v] = v <= knee ? v : Math.round(knee + (room * (v - knee)) / (room + (v - knee)));
+  }
+  return lut;
+})();
+
+// Ceilings sit outside torch range in most corridors, and the lightmap is flat,
+// so without a floor of their own they render as an unreadable void over a third
+// of the screen.
+const CEIL_AMBIENT = 0.34;
+
 export class Renderer {
   constructor(canvas, tex) {
     this.canvas = canvas;
@@ -97,20 +117,22 @@ export class Renderer {
         const tX = ((fx - cx) * S) & (S - 1);
         const tY = ((fy - cy) * S) & (S - 1);
         const c = tex.pix[tY * S + tX];
-        const lit = level.lightAt(cx, cy) * f * (isFloor ? 1 : 0.88);
+        const raw = level.lightAt(cx, cy);
+        const lit = (isFloor ? raw : Math.max(raw * 0.9, CEIL_AMBIENT)) * f;
         const r = ((c & 255) * lit * t0 + FOG[0] * fogT * 0.45) | 0;
         const g = (((c >> 8) & 255) * lit * t1 + FOG[1] * fogT * 0.45) | 0;
         const b = (((c >> 16) & 255) * lit * t2 + FOG[2] * fogT * 0.45) | 0;
-        buf[rowBase + x] = (255 << 24) | (b << 16) | (g << 8) | r;
+        buf[rowBase + x] = (255 << 24) |
+          (TONE[b > TONE_MAX ? TONE_MAX : b] << 16) |
+          (TONE[g > TONE_MAX ? TONE_MAX : g] << 8) |
+          TONE[r > TONE_MAX ? TONE_MAX : r];
         fx += stepX; fy += stepY;
       }
     }
   }
 
   drawWalls(level, p, dirX, dirY, planeX, planeY, horizon, time) {
-    const { w, h, buf, zbuf } = this;
-    const FOG = this.fogC;
-    const [t0, t1, t2] = this.tint;
+    const { w, h, zbuf } = this;
     const barrierFrame = this.tex.barrier[Math.floor(time * 9) % this.tex.barrier.length];
 
     for (let x = 0; x < w; x++) {
@@ -127,54 +149,103 @@ export class Renderer {
       else { stepY = 1; sideY = (mapY + 1 - p.y) * deltaY; }
 
       let side = 0, hit = 0, dist = 0, guard = 128;
+      let seal = null;   // a live seal the ray passes through on its way
       while (guard-- > 0) {
         if (sideX < sideY) { sideX += deltaX; mapX += stepX; side = 0; }
         else { sideY += deltaY; mapY += stepY; side = 1; }
-        if (level.solid(mapX, mapY)) { hit = 1; break; }
+        if (level.solid(mapX, mapY)) {
+          // A sealed doorway is a membrane, not masonry: record it and keep
+          // casting, so the room beyond stays visible through the field. Only
+          // the first one counts — two seals deep is not worth the cost.
+          if (!seal && level.tileAt(mapX, mapY) === T.BARRIER) {
+            seal = {
+              perp: side === 0 ? sideX - deltaX : sideY - deltaY,
+              side, mapX, mapY,
+            };
+            continue;
+          }
+          hit = 1; break;
+        }
         dist = side === 0 ? sideX - deltaX : sideY - deltaY;
         if (dist > RENDER.viewDistance) break;
       }
-      if (!hit) { zbuf[x] = RENDER.viewDistance; continue; }
 
-      const perp = side === 0 ? sideX - deltaX : sideY - deltaY;
-      zbuf[x] = perp;
-      if (perp > RENDER.viewDistance) continue;
-
-      const tile = level.tileAt(mapX, mapY);
-      const tex = tile === T.BARRIER ? barrierFrame : (this.tex.walls[tile] || this.tex.walls[1]);
-      const S = tex.size;
-
-      let wallX = side === 0 ? p.y + perp * rayY : p.x + perp * rayX;
-      wallX -= Math.floor(wallX);
-      let texX = Math.floor(wallX * S);
-      if ((side === 0 && rayX > 0) || (side === 1 && rayY < 0)) texX = S - texX - 1;
-
-      const lineH = h / perp;
-      const start = horizon - lineH / 2;
-      const y0 = Math.max(0, Math.ceil(start));
-      const y1 = Math.min(h - 1, Math.floor(start + lineH));
-      const texStep = S / lineH;
-      let texPos = (y0 - start) * texStep;
-
-      const lit0 = level.lightAt(mapX - (side === 0 ? stepX : 0), mapY - (side === 1 ? stepY : 0));
-      const fogT = perp / RENDER.viewDistance;
-      const f = 1 - fogT * fogT;
-      const lit = lit0 * f * (side === 1 ? 0.72 : 1);
-      const litR = lit * t0, litG = lit * t1, litB = lit * t2;
-      const fr = FOG[0] * fogT * 0.45, fg = FOG[1] * fogT * 0.45, fb = FOG[2] * fogT * 0.45;
-
-      for (let y = y0; y <= y1; y++) {
-        const texY = Math.min(S - 1, texPos | 0);
-        texPos += texStep;
-        const i = texY * S + texX;
-        const c = tex.pix[i];
-        const e = tex.emis[i] / 255 * f;
-        const cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
-        const r = Math.min(255, cr * litR + cr * e + fr) | 0;
-        const g = Math.min(255, cg * litG + cg * e + fg) | 0;
-        const b = Math.min(255, cb * litB + cb * e + fb) | 0;
-        buf[y * w + x] = (255 << 24) | (b << 16) | (g << 8) | r;
+      if (hit) {
+        const perp = side === 0 ? sideX - deltaX : sideY - deltaY;
+        zbuf[x] = perp;
+        if (perp <= RENDER.viewDistance) {
+          const tile = level.tileAt(mapX, mapY);
+          const tex = this.tex.walls[tile] || this.tex.walls[1];
+          this.paintColumn(x, perp, side, mapX, mapY, stepX, stepY, tex, rayX, rayY, horizon, p, level, false);
+        }
+      } else {
+        zbuf[x] = RENDER.viewDistance;
       }
+
+      // The membrane paints last, over whatever the ray found behind it. The
+      // depth buffer keeps the far wall, so anything sealed in the room still
+      // draws and reads as being on the other side of the field.
+      if (seal && seal.perp <= RENDER.viewDistance) {
+        this.paintColumn(x, seal.perp, seal.side, seal.mapX, seal.mapY, stepX, stepY,
+                         barrierFrame, rayX, rayY, horizon, p, level, true);
+      }
+    }
+  }
+
+  // One vertical strip of wall. Opaque for masonry; alpha-composited for a
+  // seal, where the texture's own brightness drives how much it veils.
+  paintColumn(x, perp, side, mapX, mapY, stepX, stepY, tex, rayX, rayY, horizon, p, level, membrane) {
+    const { w, h, buf } = this;
+    const FOG = this.fogC;
+    const [t0, t1, t2] = this.tint;
+    const S = tex.size;
+
+    let wallX = side === 0 ? p.y + perp * rayY : p.x + perp * rayX;
+    wallX -= Math.floor(wallX);
+    let texX = (wallX * S) | 0;
+    if ((side === 0 && rayX > 0) || (side === 1 && rayY < 0)) texX = S - texX - 1;
+
+    const lineH = h / perp;
+    const start = horizon - lineH / 2;
+    const y0 = Math.max(0, Math.ceil(start));
+    const y1 = Math.min(h - 1, Math.floor(start + lineH));
+    const texStep = S / lineH;
+    let texPos = (y0 - start) * texStep;
+
+    const lit0 = level.lightAt(mapX - (side === 0 ? stepX : 0), mapY - (side === 1 ? stepY : 0));
+    const fogT = perp / RENDER.viewDistance;
+    const f = 1 - fogT * fogT;
+    const lit = lit0 * f * (side === 1 ? 0.72 : 1);
+    const litR = lit * t0, litG = lit * t1, litB = lit * t2;
+    const fr = FOG[0] * fogT * 0.45, fg = FOG[1] * fogT * 0.45, fb = FOG[2] * fogT * 0.45;
+
+    for (let y = y0; y <= y1; y++) {
+      const texY = Math.min(S - 1, texPos | 0);
+      texPos += texStep;
+      const i = texY * S + texX;
+      const c = tex.pix[i];
+      const e = tex.emis[i] / 255 * f;
+      const cr = c & 255, cg = (c >> 8) & 255, cb = (c >> 16) & 255;
+      let r = (cr * litR + cr * e + fr) | 0;
+      let g = (cg * litG + cg * e + fg) | 0;
+      let b = (cb * litB + cb * e + fb) | 0;
+      const di = y * w + x;
+
+      if (membrane) {
+        // Bright filaments veil what is behind them; the gaps stay clear.
+        let a = 0.10 + (tex.emis[i] / 255) * 0.85;
+        if (a > 0.92) a = 0.92;
+        const d = buf[di];
+        const dr = d & 255, dg = (d >> 8) & 255, db = (d >> 16) & 255;
+        r = dr + (r - dr) * a + r * a * 0.35;   // a little additive lift so it glows
+        g = dg + (g - dg) * a + g * a * 0.35;
+        b = db + (b - db) * a + b * a * 0.35;
+      }
+
+      buf[di] = (255 << 24) |
+        (TONE[b > TONE_MAX ? TONE_MAX : b | 0] << 16) |
+        (TONE[g > TONE_MAX ? TONE_MAX : g | 0] << 8) |
+        TONE[r > TONE_MAX ? TONE_MAX : r | 0];
     }
   }
 
@@ -211,10 +282,25 @@ export class Renderer {
       const S = tex.size;
       const fogT = ty / RENDER.viewDistance;
       const fade = 1 - fogT * fogT;
-      const ambientFloor = s.creature ? 0.62 : 0.25;
+      // Creatures keep a floor under them so they never vanish in an unlit
+      // corridor, but a much lower one than before — at 0.62 they glowed
+      // against walls lit at 0.22, which is what read as pasted-on.
+      const ambientFloor = s.creature ? 0.44 : 0.25;
+      // Creatures take the same light as the room. They used to get a flat
+      // +0.3 lift, which is exactly what made them read as stickers pasted over
+      // the scene; a floor under it keeps them visible in an unlit corridor.
       const lit = s.additive
         ? fade
-        : Math.min(1.4, Math.max(ambientFloor, game.level.lightAt(Math.floor(s.x), Math.floor(s.y)) + 0.3)) * fade;
+        : Math.min(1.4, Math.max(ambientFloor, game.level.lightAt(Math.floor(s.x), Math.floor(s.y)))) * fade;
+      // Biome grading is light, not a filter laid on top, so anything solid
+      // takes the tint the walls and floor already took.
+      // Only part of the way toward the biome tint: enough that creatures sit
+      // in the same light as the room, not so much that a rust-lit floor turns
+      // every monster into another brown shape on a brown wall.
+      const GRADE = 0.55;
+      const gr = s.additive ? 1 : 1 + (this.tint[0] - 1) * GRADE;
+      const gg = s.additive ? 1 : 1 + (this.tint[1] - 1) * GRADE;
+      const gb = s.additive ? 1 : 1 + (this.tint[2] - 1) * GRADE;
       const alpha = (s.alpha === undefined ? 1 : s.alpha);
       const tint = s.tint;
       const flash = s.flash || 0;
@@ -228,12 +314,16 @@ export class Renderer {
           const c = tex.pix[texY * S + texX];
           const a = (c >>> 24) / 255 * alpha;
           if (a < 0.02) continue;
-          let sr = (c & 255) * lit, sg = ((c >> 8) & 255) * lit, sb = ((c >> 16) & 255) * lit;
+          let sr = (c & 255) * lit * gr, sg = ((c >> 8) & 255) * lit * gg, sb = ((c >> 16) & 255) * lit * gb;
           if (tint) { sr *= tint[0] / 255; sg *= tint[1] / 255; sb *= tint[2] / 255; }
           if (flash) {
-            sr += (flashC[0] - sr) * flash;
-            sg += (flashC[1] - sg) * flash;
-            sb += (flashC[2] - sb) * flash;
+            // Scale the flash by how bright the pixel already is, so a hit
+            // brightens the creature instead of flattening it into a white
+            // blob with no silhouette left to aim at.
+            const k = 0.3 + 0.7 * ((sr + sg + sb) * (1 / 765));
+            sr += (flashC[0] * k - sr) * flash;
+            sg += (flashC[1] * k - sg) * flash;
+            sb += (flashC[2] * k - sb) * flash;
           }
           const di = y * w + x;
           const d = buf[di];
@@ -245,7 +335,9 @@ export class Renderer {
             r = dr + (sr - dr) * a; g = dg + (sg - dg) * a; b = db + (sb - db) * a;
           }
           buf[di] = (255 << 24) |
-            ((b > 255 ? 255 : b) << 16) | ((g > 255 ? 255 : g) << 8) | (r > 255 ? 255 : r);
+            (TONE[b > TONE_MAX ? TONE_MAX : b | 0] << 16) |
+            (TONE[g > TONE_MAX ? TONE_MAX : g | 0] << 8) |
+            TONE[r > TONE_MAX ? TONE_MAX : r | 0];
         }
       }
     }
