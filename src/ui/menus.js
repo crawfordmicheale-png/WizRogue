@@ -1,6 +1,7 @@
 import { ARCHETYPES } from '../game/archetypes.js';
 import { SPELLS, SCHOOLS, spellStats } from '../game/spells.js';
 import { settings, saveSettings } from '../settings.js';
+import { SLOT_UNLOCK_DEPTH } from '../config.js';
 
 const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -179,7 +180,8 @@ export class Menus {
       <h2 class="section-title">Choose your discipline</h2>
       <p class="section-sub">${dailyLabel
         ? `Daily corridor · ${esc(dailyLabel)} — everyone descends the same halls today.`
-        : 'Two spells to start. Slots three, four and five open at depths 3, 5 and 7.'}</p>
+        : `Two spells to start. Slots three, four and five open at depths ${
+            SLOT_UNLOCK_DEPTH.slice(2).join(', ').replace(/, (\d+)$/, ' and $1')}.`}</p>
       <div class="cards">${cards}</div>
     `);
 

@@ -102,25 +102,38 @@ function runeTex() {
   return t;
 }
 
-function barrierFrames(count = 6) {
+function barrierFrames(count = 8) {
   const frames = [];
   const S = TEX_SIZE;
   for (let f = 0; f < count; f++) {
     const t = blankTex();
+    const phase = (f / count) * Math.PI * 2;
     const scroll = (f / count) * S;
     for (let y = 0; y < S; y++) {
       for (let x = 0; x < S; x++) {
-        // Vertical filaments drifting upward, with brighter nodes where they cross.
-        const fil = Math.pow(Math.abs(Math.sin(x * 0.42 + Math.sin((y + scroll) * 0.08) * 0.9)), 6);
-        const drift = noise(x * 0.18, (y + scroll * 2) * 0.09);
-        const pulse = 0.5 + 0.5 * Math.sin(((y + scroll * 3) * 0.16));
-        const core = fil * (0.55 + drift * 0.9);
-        const v = 0.22 + core * 1.5 + pulse * 0.16 + drift * 0.2;
-        const r = 60 * v + core * 150;
-        const g = 170 * v + core * 110;
-        const b = 235 * v + core * 60;
+        const u = x / S, v = y / S;
+        // The field grips the doorway at its frame and thins toward the middle,
+        // so you can see the room you are locked in with.
+        const edge = Math.min(u, 1 - u, v, 1 - v);
+        const rim = Math.pow(Math.max(0, 1 - edge / 0.18), 2);
+        // Slow aurora drifting across the surface.
+        const flow = fbm(x * 0.06 + Math.sin(phase) * 0.7, (y + scroll) * 0.05);
+        const sheen = Math.pow(Math.max(0, flow - 0.42), 1.3) * 2.2;
+        // Sigils swimming through the membrane: broken rings on a drifting grid.
+        const gx = (((x + scroll * 0.6) % 21) - 10.5) / 10.5;
+        const gy = (((y + 7) % 21) - 10.5) / 10.5;
+        const ring = Math.abs(Math.hypot(gx, gy) - 0.66);
+        const spoke = Math.abs(Math.sin(Math.atan2(gy, gx) * 3 + phase));
+        const rune = ring < 0.13 && spoke > 0.35 ? (1 - ring / 0.13) * 0.75 : 0;
+
+        const core = sheen * 0.55 + rune + rim * 0.8;
+        const r = 34 * core + 16 * rim;
+        const g = 140 * core + 46 * rim;
+        const b = 200 * core + 86 * rim;
         t.pix[y * S + x] = pack(Math.min(255, r), Math.min(255, g), Math.min(255, b));
-        t.emis[y * S + x] = Math.min(255, v * 210 + core * 90);
+        // Emissive doubles as the veil density in the renderer: bright filaments
+        // hide what is behind them, the gaps stay clear.
+        t.emis[y * S + x] = Math.min(200, core * 150);
       }
     }
     frames.push(t);
@@ -151,8 +164,17 @@ function ceilingTex() {
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
       const n = fbm(x * 0.09, y * 0.09);
-      const v = 0.45 + n * 0.75;
-      t.pix[y * S + x] = pack(48 * v + 10, 44 * v + 10, 70 * v + 16);
+      // A coffered vault: recessed panels divided by ribs, with a bright lip
+      // along each rib. The lip is what catches torchlight, which is what makes
+      // the ceiling read as structure overhead rather than as empty black.
+      const px = Math.abs((x % 32) - 16) / 16;
+      const py = Math.abs((y % 32) - 16) / 16;
+      const ribness = Math.max(px, py);
+      let v = 0.62 + n * 0.5;
+      if (ribness > 0.84) v *= 1.2;            // the rib itself
+      else if (ribness > 0.72) v *= 1.55;      // lit lip along its edge
+      else v *= 0.86;                          // recessed panel
+      t.pix[y * S + x] = pack(74 * v + 16, 70 * v + 15, 96 * v + 22);
     }
   }
   return t;
@@ -160,12 +182,32 @@ function ceilingTex() {
 
 // --- sprite generation --------------------------------------------------
 
-function makeCtx(w, h) {
+// Sprites are vector-drawn, so rendering them at twice their nominal size costs
+// only memory and buys real detail — a Warden filling the screen breaks up into
+// blocks a quarter the size it used to.
+const SPRITE_SS = 3;
+
+function makeCtx(w, h, ss = SPRITE_SS) {
   const c = document.createElement('canvas');
-  c.width = w; c.height = h;
+  c.width = w * ss; c.height = h * ss;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
+  ctx.scale(ss, ss);
   return ctx;
+}
+
+// A soft dark ellipse laid at a creature's feet. Without it nothing in the room
+// has a footing and every sprite reads as a sticker hung in the air.
+function shadowSprite() {
+  const S = 32;
+  const ctx = makeCtx(S, S);
+  const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, 'rgba(0,0,0,0.85)');
+  g.addColorStop(0.55, 'rgba(0,0,0,0.45)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  return toTex(ctx);
 }
 
 function toTex(ctx) {
@@ -605,6 +647,7 @@ export function buildTextures() {
       health: [pickupSprite('health')],
       mana: [pickupSprite('mana')],
       torch: [torchSprite(0), torchSprite(1), torchSprite(2)],
+      shadow: [shadowSprite()],
     },
   };
 }

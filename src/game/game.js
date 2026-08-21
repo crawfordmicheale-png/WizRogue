@@ -112,6 +112,24 @@ export class Game {
     return e;
   }
 
+  // Encounters trigger as you cross the threshold, so a seal can slam shut on
+  // the exact tile you are standing in — leaving you inside solid rock with
+  // every direction blocked and no input able to free you. That is a run-ending
+  // soft-lock, so shove whoever is caught in the doorway clear of it.
+  pushClearOfSeals(enc) {
+    const p = this.player;
+    if (!collides(this.level, p.x, p.y, p.radius)) return;
+    const dirs = [[enc.center.x - p.x, enc.center.y - p.y], [p.x - enc.center.x, p.y - enc.center.y]];
+    for (const [rx, ry] of dirs) {
+      const len = Math.hypot(rx, ry) || 1;
+      const dx = rx / len, dy = ry / len;
+      for (let i = 1; i <= 28; i++) {
+        const nx = p.x + dx * i * 0.08, ny = p.y + dy * i * 0.08;
+        if (!collides(this.level, nx, ny, p.radius)) { p.x = nx; p.y = ny; return; }
+      }
+    }
+  }
+
   pushLog(text, color = '#dcd6ff') {
     this.log.push({ text, color, t: this.time });
     if (this.log.length > 5) this.log.shift();
@@ -189,6 +207,7 @@ export class Game {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
       if (b && !b.open) b.active = true;
     }
+    this.pushClearOfSeals(enc);
     this.audio?.play(enc.kind === 'boss' ? 'boss' : 'seal');
     this.pushLog(enc.kind === 'boss' ? 'The Warden stirs' : 'The way seals behind you', '#ff9a6a');
     this.hooks.onEncounter?.(enc);
@@ -646,6 +665,10 @@ export class Game {
       const nx = enemy.x + Math.cos(a) * dist;
       const ny = enemy.y + Math.sin(a) * dist;
       if (collides(this.level, nx, ny, enemy.radius)) continue;
+      // Only the destination used to be checked, so a warlock could blink
+      // straight through the wall of a sealed arena. Once outside it can never
+      // be reached or killed, and the seal never opens — the run is over.
+      if (!this.hasLineOfSight(enemy.x, enemy.y, nx, ny)) continue;
       this.spawnHitBurst(enemy.x, enemy.y, enemy.z, [190, 110, 255], 10);
       enemy.x = nx; enemy.y = ny;
       this.spawnHitBurst(nx, ny, enemy.z, [190, 110, 255], 10);
@@ -967,6 +990,16 @@ export class Game {
       else if (e.effects.burn > 0) tint = [255, 190, 150];
       else if (e.elite) tint = e.elite.tint;
       else if (e.type.tintBase) tint = e.type.tintBase;
+      // Contact shadow first, so it lands under the creature. Hovering things
+      // throw a wider, fainter one.
+      const hover = !!e.type.hover;
+      out.push({
+        x: e.x, y: e.y, z: 0.03,
+        w: size * (hover ? 0.78 : 0.62), h: size * (hover ? 0.26 : 0.2),
+        tex: sprites.shadow[0],
+        alpha: (hover ? 0.34 : 0.55) *
+          Math.min(1, this.level.lightAt(Math.floor(e.x), Math.floor(e.y)) * 1.7),
+      });
       out.push({
         x: e.x, y: e.y,
         z: e.z + (e.type.hover ? Math.sin(e.bob) * 0.09 : 0),
