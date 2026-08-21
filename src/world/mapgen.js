@@ -12,6 +12,24 @@ export const T = {
 
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
+// What a sealed room asks of you. Every arena used to be the same request —
+// kill everything — which is why depth 8 played exactly like depth 2 with
+// bigger numbers. The seal machinery is identical for all of them; only the
+// condition for opening it differs.
+export const ARENA_RULES = ['clear', 'waves', 'holdout', 'dark'];
+
+// Depth 1 is always a plain fight: the first sealed room has to teach the rule
+// before the game starts bending it.
+function pickRule(rng, depth) {
+  if (depth < 2) return 'clear';
+  return rng.weighted([
+    { weight: 10, rule: 'clear' },
+    { weight: depth >= 2 ? 6 : 0, rule: 'waves' },
+    { weight: depth >= 3 ? 5 : 0, rule: 'holdout' },
+    { weight: depth >= 4 ? 4 : 0, rule: 'dark' },
+  ]).rule;
+}
+
 // Enemy roster with a spawn cost, used to fill each arena's budget.
 const ROSTER = [
   { id: 'crawler',  cost: 1, minDepth: 1, weight: 10 },
@@ -178,13 +196,24 @@ function buildLevel(seed, depth) {
     carve(nx, ny, nx, ny);
     spine.push({ x: exit.x, y: exit.y }, { x: exit.x + dx, y: exit.y + dy }, { x: nx, y: ny });
 
+    const rule = pickRule(rng, depth);
+    // A hold-out starts thinner and refills, so its budget buys reinforcements
+    // rather than a single wall of bodies at the door.
+    const budget = (3 + depth * 1.5) * (rule === 'holdout' ? 0.6 : 1);
     encounters.push({
       id,
       kind: 'arena',
+      rule,
       bounds: { x0, y0, x1, y1 },
       center: { x: (x0 + x1) / 2 + 0.5, y: (y0 + y1) / 2 + 0.5 },
       seals,
-      spawns: rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, 3 + depth * 1.5),
+      spawns: rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, budget),
+      // Hold-outs need somewhere to put the next arrival; reuse the same
+      // floor-checked roll so reinforcements never appear inside rock.
+      reinforce: rule === 'holdout'
+        ? rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, 4 + depth * 1.6)
+        : [],
+      holdFor: rule === 'holdout' ? 22 + Math.min(14, depth) : 0,
       triggered: false,
       cleared: false,
     });
