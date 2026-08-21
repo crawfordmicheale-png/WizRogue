@@ -26,6 +26,34 @@ const TONE = (() => {
 // of the screen.
 const CEIL_AMBIENT = 0.34;
 
+// A finger or thumb segment: a bar with a rounded tip, drawn upward from its
+// root so a joint is just a translate plus a rotate.
+function capsule(ctx, wide, len) {
+  const r = wide / 2;
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.lineTo(-r, -(len - r));
+  ctx.arc(0, -(len - r), r, Math.PI, 0);
+  ctx.lineTo(r, 0);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// Two-segment finger with a knuckle bend, so curling reads as a hand closing
+// rather than an ellipse shrinking.
+function finger(ctx, x, y, lean, len, wide, curl) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(lean);
+  ctx.fillStyle = '#c49a74';
+  capsule(ctx, wide, len * 0.58);
+  ctx.translate(0, -len * 0.54);
+  ctx.rotate(curl);
+  ctx.fillStyle = '#ac845e';
+  capsule(ctx, wide * 0.88, len * 0.5);
+  ctx.restore();
+}
+
 export class Renderer {
   constructor(canvas, tex) {
     this.canvas = canvas;
@@ -467,17 +495,29 @@ export class Renderer {
     const s = h / 118;
     const bob = Math.sin(p.bobPhase) * 2.6;
     const bob2 = Math.cos(p.bobPhase * 2) * 1.4;
-    const kick = p.castFlash * 7;
+
+    // Cast motion. `a` is 1 at the instant of release and eases to 0: the hand
+    // snaps back and up, the fingers flick open, and a damped wobble carries the
+    // follow-through so the recovery is not a straight line back to rest.
+    const a = p.castAnim;
+    const t = 1 - a;
+    const snap = a * a;
+    const wobble = Math.sin(t * 17) * Math.exp(-t * 5.5);
 
     for (const side of [-1, 1]) {
-      const baseX = w / 2 + side * w * 0.2;
-      const baseY = h + (10 + kick + (side > 0 ? bob : -bob) + bob2) * s * 0.5;
+      // The casting hand leads; the other one answers with a smaller version of
+      // the same motion.
+      const lead = side === p.castSide ? 1 : 0.38;
+      const kick = snap * 13 * lead;
+      const baseX = w / 2 + side * w * 0.2 - side * snap * 5 * lead;
+      const baseY = h + (10 + kick + (side > 0 ? bob : -bob) + bob2 + wobble * 2.2 * lead) * s * 0.5;
+
       ctx.save();
       ctx.translate(baseX, baseY);
       ctx.scale(side * s, s);
-      ctx.rotate(-0.26);
+      ctx.rotate(-0.26 - snap * 0.34 * lead + wobble * 0.05 * lead);
 
-      // forearm and robe sleeve
+      // --- forearm and robe sleeve ---
       const sleeve = ctx.createLinearGradient(0, -14, 0, 26);
       sleeve.addColorStop(0, '#3b2c56');
       sleeve.addColorStop(1, '#1a1229');
@@ -485,8 +525,8 @@ export class Renderer {
       ctx.beginPath();
       ctx.moveTo(-9, 30);
       ctx.lineTo(10, 30);
-      ctx.lineTo(6.5, -6);
-      ctx.lineTo(-6, -4);
+      ctx.lineTo(6.5, -4);
+      ctx.lineTo(-6, -2);
       ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = 'rgba(0,0,0,0.45)';
@@ -497,52 +537,91 @@ export class Renderer {
       ctx.fillStyle = p.archetype.accent;
       ctx.globalAlpha = 0.55;
       ctx.beginPath();
-      ctx.moveTo(-6.4, -1); ctx.lineTo(6.8, -3); ctx.lineTo(7.2, 1.4); ctx.lineTo(-6.6, 3.2);
+      ctx.moveTo(-6.4, 1); ctx.lineTo(6.8, -1); ctx.lineTo(7.2, 3.4); ctx.lineTo(-6.6, 5.2);
       ctx.closePath();
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // hand, cupped toward the centre of the screen
-      ctx.fillStyle = '#b98d68';
+      // --- hand ---
+      // Fingers curl at rest and flick open on release; the spread widens too,
+      // so a cast reads as the hand opening rather than the whole arm sliding.
+      const open = snap * lead;
+      const curl = 0.95 - open * 0.8;
+      const spread = 1 + open * 0.35;
+
+      // palm: a rounded wedge, wider at the knuckles than at the wrist
+      const palm = ctx.createLinearGradient(0, -16, 0, -2);
+      palm.addColorStop(0, '#c9a07a');
+      palm.addColorStop(1, '#9a7050');
+      ctx.fillStyle = palm;
       ctx.beginPath();
-      ctx.ellipse(-0.5, -9, 5.6, 6.4, -0.15, 0, Math.PI * 2);
+      ctx.moveTo(-4.6, -2);
+      ctx.quadraticCurveTo(-6.6, -8, -5.4, -13.2);
+      ctx.quadraticCurveTo(0, -16.4, 5.4, -13.2);
+      ctx.quadraticCurveTo(6.6, -8, 4.6, -2);
+      ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = '#a87c5c';
-      for (let f = 0; f < 3; f++) {
-        ctx.beginPath();
-        ctx.ellipse(-4.6 + f * 3.4, -13.4 - f * 0.5, 1.5, 3.1, -0.3 + f * 0.16, 0, Math.PI * 2);
-        ctx.fill();
+
+      // four fingers rooted along the knuckle line, fanning outward
+      for (let f = 0; f < 4; f++) {
+        const k = f / 3;
+        const rootX = (-4.1 + f * 2.75) * spread;
+        const rootY = -12.8 - Math.sin(k * Math.PI) * 1.1;
+        const lengths = [5.4, 6.3, 6.0, 5.0];
+        const lean = (-0.34 + f * 0.2) * spread;
+        finger(ctx, rootX, rootY, lean, lengths[f], 2.5 - f * 0.12, curl * (1 - k * 0.12));
       }
 
-      // charge held in the palm
+      // thumb: shorter, thicker, crossing in front of the palm
+      ctx.save();
+      ctx.translate(-4.9, -6.2);
+      ctx.rotate(-1.02 + open * 0.34);
+      ctx.fillStyle = '#bf9770';
+      capsule(ctx, 3.1, 4.4);
+      ctx.translate(0, -4.0);
+      ctx.rotate(0.5 - open * 0.3);
+      ctx.fillStyle = '#ad855f';
+      capsule(ctx, 2.7, 3.6);
+      ctx.restore();
+
+      // --- the charge cupped in the fingers ---
       if (stats) {
+        const cx = 0, cy = -15.5;
         const pulse = 0.6 + Math.sin(time * 6 + side) * 0.16 + p.castFlash * 0.55;
         const rad = (ready ? 9.5 : 5) * pulse;
-        const g = ctx.createRadialGradient(-0.5, -13, 0, -0.5, -13, Math.max(1.5, rad));
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1.5, rad));
         g.addColorStop(0, `rgba(255,255,255,${ready ? 0.95 : 0.45})`);
         g.addColorStop(0.4, `rgba(${color[0]},${color[1]},${color[2]},${ready ? 0.85 : 0.3})`);
         g.addColorStop(1, `rgba(${color[0]},${color[1]},${color[2]},0)`);
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(-0.5, -13, Math.max(1.5, rad), 0, Math.PI * 2);
+        ctx.arc(cx, cy, Math.max(1.5, rad), 0, Math.PI * 2);
         ctx.fill();
         if (ready) {
           ctx.strokeStyle = `rgba(${color[0]},${color[1]},${color[2]},0.5)`;
           ctx.lineWidth = 0.7;
           ctx.beginPath();
-          ctx.arc(-0.5, -13, 6 + Math.sin(time * 3 + side) * 0.8, 0, Math.PI * 2);
+          ctx.arc(cx, cy, 6 + Math.sin(time * 3 + side) * 0.8, 0, Math.PI * 2);
           ctx.stroke();
           // Three motes orbiting the charge make "ready" legible at a glance.
           for (let m = 0; m < 3; m++) {
             const oa = time * 2.6 * side + m * 2.094;
             const or = 7.5 + Math.sin(time * 5 + m) * 1.2;
-            const ox = -0.5 + Math.cos(oa) * or;
-            const oy = -13 + Math.sin(oa) * or * 0.55;
             ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${0.55 + Math.sin(time * 7 + m) * 0.25})`;
             ctx.beginPath();
-            ctx.arc(ox, oy, 0.9, 0, Math.PI * 2);
+            ctx.arc(cx + Math.cos(oa) * or, cy + Math.sin(oa) * or * 0.55, 0.9, 0, Math.PI * 2);
             ctx.fill();
           }
+        }
+        // A burst of light along the fingers at the moment of release.
+        if (a > 0) {
+          const fg = ctx.createRadialGradient(cx, cy - 1, 0, cx, cy - 1, 13 * a);
+          fg.addColorStop(0, `rgba(255,255,255,${0.5 * a})`);
+          fg.addColorStop(1, `rgba(${color[0]},${color[1]},${color[2]},0)`);
+          ctx.fillStyle = fg;
+          ctx.beginPath();
+          ctx.arc(cx, cy - 1, Math.max(0.5, 13 * a), 0, Math.PI * 2);
+          ctx.fill();
         }
       }
       ctx.restore();
