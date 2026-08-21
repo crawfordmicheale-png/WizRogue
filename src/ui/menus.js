@@ -29,6 +29,14 @@ function controlHints() {
     </div>`;
 }
 
+// "Conflagrate with Ember Bolt — rot and fire..." reads as a reason to take the
+// card; the mechanic's name alone does not.
+function synergyLine(syn) {
+  return syn.partner
+    ? `${syn.name} with ${syn.partner} — ${syn.blurb}`
+    : `${syn.name} — ${syn.blurb}`;
+}
+
 export class Menus {
   constructor(root = document) {
     this.el = root.getElementById('overlay');
@@ -202,6 +210,7 @@ export class Menus {
         <h3>${esc(o.title)}</h3>
         <p>${esc(o.body)}</p>
         ${o.type === 'spell' ? `<span class="tag">${esc(spellLine(o.spellId, player))}</span>` : ''}
+        ${o.synergy ? `<span class="tag synergy">${esc(synergyLine(o.synergy))}</span>` : ''}
       </button>`).join('');
 
     this.render(`
@@ -227,6 +236,9 @@ export class Menus {
     this.render(`
       <h2 class="section-title">Your loadout is full</h2>
       <p class="section-sub">Choose a slot to overwrite with ${esc(sp.name)}.</p>
+      ${option.synergy?.partner
+        ? `<p class="section-sub warn">Keep ${esc(option.synergy.partner)} — it is what completes ${esc(option.synergy.name)}.</p>`
+        : ''}
       ${loadoutStrip(player, true)}
       <div class="row"><button class="btn ghost" id="backBtn">Back</button></div>
     `);

@@ -1,4 +1,5 @@
 import { clamp, angleDelta } from '../util/rng.js';
+import { SHATTER_MIN } from './spells.js';
 
 // Base stats at depth 1. Everything scales from here.
 export const ENEMY_TYPES = {
@@ -134,7 +135,7 @@ export class Enemy {
     }
     let dealt = amount * amp;
     // Shatter: a heavy blow on a chilled target consumes the chill for +50%.
-    if (this.effects.chill > 0 && dealt >= 22) {
+    if (this.effects.chill > 0 && dealt >= SHATTER_MIN) {
       dealt *= 1.5;
       this.effects.chill = 0;
       this.effects.chillSlow = 0;

@@ -1,7 +1,7 @@
 import { generateLevel } from '../world/mapgen.js';
 import { Player } from './player.js';
 import { Enemy, collides } from './enemies.js';
-import { SPELLS, spellStats, schoolColor } from './spells.js';
+import { SPELLS, spellStats, schoolColor, SYNERGIES } from './spells.js';
 import { getArchetype } from './archetypes.js';
 import { clamp, angleDelta, makeRng } from '../util/rng.js';
 import { PLAYER, biomeForDepth } from '../config.js';
@@ -339,11 +339,7 @@ export class Game {
   synergyHint(key) {
     if (this.synergySeen?.[key]) return;
     this.synergySeen[key] = true;
-    const text = {
-      shatter: 'Shatter! Heavy blows break chilled foes',
-      conflagrate: 'Conflagrate! Rot fuels fire for bonus damage',
-      conduction: 'Conduction! Shock arcs onward when its host dies',
-    }[key];
+    const text = SYNERGIES[key]?.hint;
     if (text) this.pushLog(text, '#9fd8ff');
   }
 

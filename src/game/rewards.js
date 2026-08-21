@@ -1,4 +1,4 @@
-import { SPELLS, SPELL_IDS, MAX_RANK, SCHOOLS, spellStats } from './spells.js';
+import { SPELLS, SPELL_IDS, MAX_RANK, SCHOOLS, spellStats, synergyUnlockedBy } from './spells.js';
 
 // Builds the three cards offered after each cleared depth. Options are drawn so
 // that a run keeps improving even when the spell pool runs dry.
@@ -15,16 +15,21 @@ export function rollRewards(game, rngFloat = Math.random) {
 
   for (const id of pickSome(candidates, 3, rngFloat)) {
     const sp = SPELLS[id];
+    // Reactions are the most interesting thing a loadout can do and the least
+    // visible: you could only find them by accident, mid-fight, after already
+    // having committed the slot. Say so at the moment of choosing instead.
+    const synergy = synergyUnlockedBy(p.slots, id, 1, p.mods);
     pool.push({
       type: 'spell',
       spellId: id,
-      weight: hasFreeSlot ? 32 : 18,
+      weight: (hasFreeSlot ? 32 : 18) + (synergy ? 8 : 0),
       title: sp.name,
       kicker: hasFreeSlot ? 'New spell' : 'New spell — replaces a slot',
       body: sp.desc,
       color: SCHOOLS[sp.school].color,
       glyph: sp.glyph,
       needsSlot: !hasFreeSlot,
+      synergy,
     });
   }
 
@@ -32,10 +37,15 @@ export function rollRewards(game, rngFloat = Math.random) {
     const sp = SPELLS[entry.id];
     const now = spellStats(entry.id, entry.rank, p.mods);
     const next = spellStats(entry.id, entry.rank + 1, p.mods);
+    // A rank can push a spell over the threshold where it starts shattering
+    // chilled targets, which is worth knowing before you spend the pick.
+    const others = p.slots.filter((sl) => sl !== entry);
+    const synergy = synergyUnlockedBy(others, entry.id, entry.rank + 1, p.mods);
     pool.push({
       type: 'empower',
       spellId: entry.id,
-      weight: 22,
+      weight: 22 + (synergy ? 8 : 0),
+      synergy,
       title: `${sp.name} — rank ${entry.rank + 1}`,
       kicker: 'Empower',
       body: `${now.dmg || now.heal || now.shield} → ${next.dmg || next.heal || next.shield} power, ${now.cost} → ${next.cost} mana.`,

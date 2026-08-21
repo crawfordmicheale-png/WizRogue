@@ -487,6 +487,17 @@ body.touch .chip { font-size: 10px; padding: 5px 11px; }
 .card p { font-size: 11.5px; line-height: 1.55; color: var(--dim); margin: 0; }
 .card .big { font-size: 30px; line-height: 1; margin-bottom: 6px; color: var(--accent, var(--gold)); text-shadow: 0 0 18px currentColor; }
 .card .tag { display: inline-block; margin-top: 10px; font-size: 10px; color: var(--dim); }
+.section-sub.warn { color: #ffcf8a; }
+.card .tag.synergy {
+  display: block;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 80%, white);
+  line-height: 1.45;
+}
 .card ul { margin: 10px 0 0; padding-left: 16px; }
 .card li { font-size: 11px; color: var(--dim); line-height: 1.6; }
 
