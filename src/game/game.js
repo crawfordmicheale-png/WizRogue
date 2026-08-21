@@ -18,20 +18,21 @@ const SPRITE_SCALE = 1.7;
 function partitionWaves(spawns, waves) {
   const total = spawns.length;
   if (waves <= 1 || total === 0) return [spawns.slice()];
-  const weightSum = (waves * (waves + 1)) / 2;
-  const out = [];
-  let taken = 0;
-  const pool = spawns.slice();
-  for (let i = 0; i < waves; i++) {
-    const remainingWaves = waves - i;
-    let want = Math.round((total * (i + 1)) / weightSum);
-    // Never strand a wave with nothing, and never leave spawns unreleased.
-    want = Math.max(1, Math.min(want, pool.length - (remainingWaves - 1)));
-    if (i === waves - 1) want = pool.length;
-    out.push(pool.splice(0, Math.max(0, want)));
-    taken += want;
+  // Every wave gets at least one body — a wave nobody sees is not a beat, and a
+  // run of them turns "wave 9 of 10" into a flicker on the way to cleared. The
+  // remainder is weighted toward the later waves so a room escalates.
+  const n = Math.min(waves, total);
+  const sizes = new Array(n).fill(1);
+  let left = total - n;
+  const weightSum = (n * (n + 1)) / 2;
+  for (let i = 0; i < n && left > 0; i++) {
+    const extra = Math.min(left, Math.round(((total - n) * (i + 1)) / weightSum));
+    sizes[i] += extra;
+    left -= extra;
   }
-  return out;
+  sizes[n - 1] += left;
+  const pool = spawns.slice();
+  return sizes.map((k) => pool.splice(0, k));
 }
 
 export class Game {

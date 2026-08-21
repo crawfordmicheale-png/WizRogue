@@ -1,5 +1,5 @@
 import { makeRng } from '../util/rng.js';
-import { MAP } from '../config.js';
+import { MAP, COMBAT } from '../config.js';
 import { ELITE_IDS } from '../game/enemies.js';
 
 export const T = {
@@ -193,9 +193,10 @@ function buildLevel(seed, depth) {
     spine.push({ x: exit.x, y: exit.y }, { x: exit.x + dx, y: exit.y + dy }, { x: nx, y: ny });
 
     const waveCount = wavesForDepth(depth);
-    // The budget grows with depth but nothing like as fast as the wave count,
-    // so a deep room is a longer fight in more beats — not ten times the bodies.
-    const budget = 3 + depth * 1.25;
+    // Budget is per wave, not per room. Spread a room-sized budget over ten
+    // waves and each one holds half an enemy; the later waves come out empty and
+    // the fight is over before the counter finishes climbing.
+    const budget = waveCount * (COMBAT.waveBudget + depth * COMBAT.waveBudgetPerDepth);
     encounters.push({
       id,
       kind: 'arena',
@@ -204,7 +205,7 @@ function buildLevel(seed, depth) {
       bounds: { x0, y0, x1, y1 },
       center: { x: (x0 + x1) / 2 + 0.5, y: (y0 + y1) / 2 + 0.5 },
       seals,
-      spawns: rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, budget),
+      spawns: fillWaves(rng, depth, { x0, y0, x1, y1 }, tiles, W, budget, waveCount),
       triggered: false,
       cleared: false,
     });
@@ -323,6 +324,21 @@ function buildLevel(seed, depth) {
       return light[cy * W + cx];
     },
   };
+}
+
+// A room needs at least one body per wave or the HUD counts waves that never
+// arrive. Top up with the cheapest thing in the roster if the budget roll came
+// up short.
+function fillWaves(rng, depth, bounds, tiles, W, budget, waves) {
+  const spawns = rollSpawns(rng, depth, bounds, tiles, W, budget);
+  let guard = 40;
+  while (spawns.length < waves && guard-- > 0) {
+    const px = rng.int(bounds.x0, bounds.x1) + 0.5;
+    const py = rng.int(bounds.y0, bounds.y1) + 0.5;
+    if (tiles[Math.floor(py) * W + Math.floor(px)] !== T.FLOOR) continue;
+    spawns.push({ id: 'crawler', x: px, y: py, elite: null });
+  }
+  return spawns;
 }
 
 function rollSpawns(rng, depth, bounds, tiles, W, budget) {
