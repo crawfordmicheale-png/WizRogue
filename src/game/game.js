@@ -12,13 +12,27 @@ const SPRITE_SCALE = 1.7;
 
 // What the room tells you as it shuts, so the rule is legible before the first
 // hit lands rather than something you infer from dying to it.
-const ENCOUNTER_OPENING = {
-  boss: 'The Warden stirs',
-  clear: 'The way seals behind you',
-  waves: 'The way seals — something else is coming',
-  holdout: 'The seal is on a clock. Stay alive',
-  dark: 'The torches gutter out',
-};
+// Split a room's spawns into waves, weighted so the later ones are the heavy
+// ones. A fight that starts light and ends heavy escalates; an even split just
+// repeats itself.
+function partitionWaves(spawns, waves) {
+  const total = spawns.length;
+  if (waves <= 1 || total === 0) return [spawns.slice()];
+  const weightSum = (waves * (waves + 1)) / 2;
+  const out = [];
+  let taken = 0;
+  const pool = spawns.slice();
+  for (let i = 0; i < waves; i++) {
+    const remainingWaves = waves - i;
+    let want = Math.round((total * (i + 1)) / weightSum);
+    // Never strand a wave with nothing, and never leave spawns unreleased.
+    want = Math.max(1, Math.min(want, pool.length - (remainingWaves - 1)));
+    if (i === waves - 1) want = pool.length;
+    out.push(pool.splice(0, Math.max(0, want)));
+    taken += want;
+  }
+  return out;
+}
 
 export class Game {
   constructor(tex, audio, hooks = {}) {
@@ -206,38 +220,16 @@ export class Game {
       }
       const alive = this.enemies.some((e) => e.encounter === enc && !e.dead);
 
-      switch (enc.rule) {
-        case 'waves':
-          // Release the next wave on a timer, or early once the room is clear,
-          // so a fight re-reads partway through instead of resolving once.
-          if (enc.pending.length) {
-            enc.waveTimer -= dt;
-            if (enc.waveTimer <= 0 || !alive) this.releaseWave(enc);
-          } else if (!alive) this.clearEncounter(enc);
-          break;
-
-        case 'holdout': {
-          // The seal is on a clock, not a body count. Reinforcements keep
-          // arriving, so clearing the room is not the answer — surviving is.
-          enc.holdFor -= dt;
-          enc.reinforceTimer -= dt;
-          if (enc.reinforceTimer <= 0 && enc.holdFor > 3 && enc.reinforce.length) {
-            const s = enc.reinforce.shift();
-            const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
-            e.readyIn = 0.5;
-            this.spawnHitBurst(s.x, s.y, 0.6, [180, 120, 255], 14);
-            this.audio?.play('seal', { x: s.x, y: s.y });
-            enc.reinforceTimer = 3.4 + this.roll() * 2.2;
-          }
-          if (enc.holdFor <= 0) this.clearEncounter(enc);
-          break;
-        }
-
-        default:
-          if (!alive) this.clearEncounter(enc);
+      // The next wave arrives on a timer, or early once the floor is clear, so
+      // the pace follows how fast you kill rather than a fixed metronome.
+      if (enc.queue.length) {
+        enc.waveTimer -= dt;
+        if (enc.waveTimer <= 0 || !alive) this.releaseWave(enc);
+      } else if (!alive) {
+        this.clearEncounter(enc);
       }
 
-      if (enc.rule === 'dark') this.fadeRoomLight(enc, dt, true);
+      if (enc.dark) this.fadeRoomLight(enc, dt, true);
     }
   }
 
@@ -256,16 +248,17 @@ export class Game {
   }
 
   releaseWave(enc) {
-    const size = Math.max(1, Math.ceil(enc.waveSize));
-    for (let i = 0; i < size && enc.pending.length; i++) {
-      const s = enc.pending.shift();
+    const group = enc.queue.shift() || [];
+    for (let i = 0; i < group.length; i++) {
+      const s = group[i];
       const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
       e.readyIn = i * 0.3 + this.roll() * 0.4;
+      if (enc.wave > 0) this.spawnHitBurst(s.x, s.y, 0.6, [180, 120, 255], 12);
     }
-    enc.waveTimer = 7 + this.roll() * 3;
+    enc.waveTimer = 6.5 + this.roll() * 3;
     enc.wave++;
     if (enc.wave > 1) {
-      this.pushLog(`Another wave — ${enc.wave} of ${enc.waves}`, '#ff9a6a');
+      this.pushLog(`Wave ${enc.wave} of ${enc.waves}`, '#ff9a6a');
       this.audio?.play('seal');
     }
   }
@@ -273,42 +266,36 @@ export class Game {
   triggerEncounter(enc) {
     if (enc.triggered) return;
     enc.triggered = true;
-    enc.rule = enc.rule || 'clear';
     enc.dimT = 0;
-    enc.reinforceTimer = 4;
-
-    if (enc.rule === 'waves') {
-      enc.waves = enc.spawns.length >= 6 ? 3 : 2;
-      enc.wave = 0;
-      enc.waveSize = enc.spawns.length / enc.waves;
-      enc.pending = enc.spawns.slice();
-      this.releaseWave(enc);
-    } else {
-      enc.pending = [];
-      enc.spawns.forEach((s, i) => {
-        const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
-        e.readyIn = i * 0.35 + this.roll() * 0.4;
-      });
-    }
+    // Depth is the wave count, so a room's shape is the floor you are on.
+    enc.waves = Math.max(1, enc.waveCount || 1);
+    enc.wave = 0;
+    enc.queue = partitionWaves(enc.spawns, enc.waves);
+    this.releaseWave(enc);
     for (const seal of enc.seals) {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
       if (b && !b.open) b.active = true;
     }
     this.pushClearOfSeals(enc);
     this.audio?.play(enc.kind === 'boss' ? 'boss' : 'seal');
-    this.pushLog(ENCOUNTER_OPENING[enc.kind === 'boss' ? 'boss' : enc.rule], '#ff9a6a');
+    this.pushLog(
+      enc.kind === 'boss' ? 'The Warden stirs'
+        : enc.dark ? `The torches gutter out — ${enc.waves} ${enc.waves === 1 ? 'wave' : 'waves'} of them`
+          : enc.waves === 1 ? 'The way seals behind you'
+            : `The way seals — ${enc.waves} waves`,
+      '#ff9a6a');
     this.hooks.onEncounter?.(enc);
   }
 
   clearEncounter(enc) {
     enc.cleared = true;
-    enc.pending = [];
+    enc.queue = [];
     for (const seal of enc.seals) {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
       if (b) { b.active = false; b.open = true; }
     }
     this.audio?.play('unseal');
-    this.pushLog(enc.rule === 'holdout' ? 'You outlasted it — the seals fall away' : 'The seals fall away', '#8affc4');
+    this.pushLog('The seals fall away', '#8affc4');
   }
 
   checkPortal() {
@@ -366,6 +353,9 @@ export class Game {
     p.mana -= s.cost;
     p.cooldowns[slot] = s.cd;
     p.castFlash = 1;
+    p.castAnim = 1;
+    p.castSide = -p.castSide;   // hands alternate, so casting is not one pose
+
     p.castColor = schoolColor(entry.id);
 
     switch (s.kind) {
@@ -816,7 +806,9 @@ export class Game {
       this.player.shake = 1;
     }
     // Small chance of a drop so long fights stay sustainable; elites always pay out.
-    if (this.roll() < (enemy.type.boss || enemy.elite ? 1 : 0.16)) {
+    // Sustain scales with the population: corridors carry far more enemies than
+    // they used to, so a run that fights through them has to be paid for it.
+    if (this.roll() < (enemy.type.boss || enemy.elite ? 1 : 0.22)) {
       this.level.props.push({
         kind: this.roll() < 0.5 ? 'health' : 'mana',
         x: enemy.x, y: enemy.y, z: 0.35, phase: 0, taken: false,

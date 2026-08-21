@@ -41,6 +41,11 @@ export class Player {
     this.bobPhase = 0;
     this.kills = 0;
     this.castFlash = 0;
+    // Runs 1 -> 0 over the length of a cast. castFlash decays far faster and is
+    // also used for the screen tint and the light stamp, so the hands get their
+    // own clock rather than borrowing one tuned for something else.
+    this.castAnim = 0;
+    this.castSide = 1;
     this.castColor = [255, 255, 255];
     this.hurtFlash = 0;
     this.shake = 0;
@@ -114,6 +119,7 @@ export class Player {
     if (this.invuln > 0) this.invuln -= dt;
     if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.4);
     if (this.castFlash > 0) this.castFlash = Math.max(0, this.castFlash - dt * 5);
+    if (this.castAnim > 0) this.castAnim = Math.max(0, this.castAnim - dt / 0.38);
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 2.2);
     if (this.shieldTime > 0) {
       this.shieldTime -= dt;

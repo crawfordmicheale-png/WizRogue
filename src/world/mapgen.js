@@ -12,22 +12,18 @@ export const T = {
 
 const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
-// What a sealed room asks of you. Every arena used to be the same request —
-// kill everything — which is why depth 8 played exactly like depth 2 with
-// bigger numbers. The seal machinery is identical for all of them; only the
-// condition for opening it differs.
-export const ARENA_RULES = ['clear', 'waves', 'holdout', 'dark'];
+// Every sealed room is a wave fight, and the depth is the number of waves: one
+// at depth 1, six at depth 6. The room's budget is spread across them and the
+// later waves are the heavy ones, so descending changes the shape of a fight
+// rather than just the size of the health bars.
+export function wavesForDepth(depth) {
+  return Math.max(1, depth);
+}
 
-// Depth 1 is always a plain fight: the first sealed room has to teach the rule
-// before the game starts bending it.
-function pickRule(rng, depth) {
-  if (depth < 2) return 'clear';
-  return rng.weighted([
-    { weight: 10, rule: 'clear' },
-    { weight: depth >= 2 ? 6 : 0, rule: 'waves' },
-    { weight: depth >= 3 ? 5 : 0, rule: 'holdout' },
-    { weight: depth >= 4 ? 4 : 0, rule: 'dark' },
-  ]).rule;
+// Darkness is a lighting modifier rather than a rule of its own — it can sit on
+// top of any wave fight.
+function pickDark(rng, depth) {
+  return depth >= 4 && rng.chance(0.28);
 }
 
 // Enemy roster with a spawn cost, used to fill each arena's budget.
@@ -196,24 +192,19 @@ function buildLevel(seed, depth) {
     carve(nx, ny, nx, ny);
     spine.push({ x: exit.x, y: exit.y }, { x: exit.x + dx, y: exit.y + dy }, { x: nx, y: ny });
 
-    const rule = pickRule(rng, depth);
-    // A hold-out starts thinner and refills, so its budget buys reinforcements
-    // rather than a single wall of bodies at the door.
-    const budget = (3 + depth * 1.5) * (rule === 'holdout' ? 0.6 : 1);
+    const waveCount = wavesForDepth(depth);
+    // The budget grows with depth but nothing like as fast as the wave count,
+    // so a deep room is a longer fight in more beats — not ten times the bodies.
+    const budget = 3 + depth * 1.25;
     encounters.push({
       id,
       kind: 'arena',
-      rule,
+      waveCount,
+      dark: pickDark(rng, depth),
       bounds: { x0, y0, x1, y1 },
       center: { x: (x0 + x1) / 2 + 0.5, y: (y0 + y1) / 2 + 0.5 },
       seals,
       spawns: rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, budget),
-      // Hold-outs need somewhere to put the next arrival; reuse the same
-      // floor-checked roll so reinforcements never appear inside rock.
-      reinforce: rule === 'holdout'
-        ? rollSpawns(rng, depth, { x0, y0, x1, y1 }, tiles, W, 4 + depth * 1.6)
-        : [],
-      holdFor: rule === 'holdout' ? 22 + Math.min(14, depth) : 0,
       triggered: false,
       cleared: false,
     });
@@ -285,13 +276,23 @@ function buildLevel(seed, depth) {
   props.push(...placeTorches(tiles, W, H, spine, rng));
   props.push(...scatterPickups(tiles, W, spine, rng, depth));
 
+  // The corridors between sealed rooms used to be empty walking, which made the
+  // level read as a series of arenas joined by hallways. They are populated now,
+  // spread the whole length of the route and kept out of the arenas so a sealed
+  // fight is still exactly the fight it was built to be.
   const wanderers = [];
-  const strollCount = Math.min(6, 1 + Math.floor(depth / 2));
-  const roamPool = ROSTER.filter((e) => e.minDepth <= depth && e.cost <= 3);
+  const strollCount = Math.min(16, 4 + Math.round(depth * 1.3));
+  const roamPool = ROSTER.filter((e) => e.minDepth <= depth && e.cost <= (depth >= 4 ? 4 : 3));
+  const inArena = (cx, cy) => encounters.some((e) =>
+    e.kind === 'arena' && cx >= e.bounds.x0 && cx <= e.bounds.x1 && cy >= e.bounds.y0 && cy <= e.bounds.y1);
   for (let i = 0; i < strollCount; i++) {
-    const cell = spine[Math.floor((0.3 + 0.65 * (i / strollCount)) * spine.length)];
-    if (!cell || tiles[idx(cell.x, cell.y)] !== T.FLOOR) continue;
-    wanderers.push({ id: rng.weighted(roamPool).id, x: cell.x + 0.5, y: cell.y + 0.5 });
+    const at = 0.12 + 0.86 * ((i + rng.float(0, 0.7)) / strollCount);
+    const cell = spine[Math.min(spine.length - 1, Math.floor(at * spine.length))];
+    if (!cell || tiles[idx(cell.x, cell.y)] !== T.FLOOR || inArena(cell.x, cell.y)) continue;
+    // Nudge off the centre line so a corridor is not a single file queue.
+    const jx = cell.x + 0.5 + rng.float(-0.3, 0.3);
+    const jy = cell.y + 0.5 + rng.float(-0.3, 0.3);
+    wanderers.push({ id: rng.weighted(roamPool).id, x: jx, y: jy });
   }
 
   // Face the player down the corridor rather than at whichever wall the first
@@ -388,7 +389,7 @@ function placeTorches(tiles, W, H, spine, rng) {
 
 function scatterPickups(tiles, W, spine, rng, depth) {
   const out = [];
-  const count = 2 + Math.floor(depth / 3);
+  const count = 3 + Math.floor(depth / 2);
   for (let i = 0; i < count; i++) {
     const c = spine[rng.int(Math.floor(spine.length * 0.15), spine.length - 1)];
     if (!c || tiles[c.y * W + c.x] !== T.FLOOR) continue;

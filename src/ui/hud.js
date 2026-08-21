@@ -89,15 +89,9 @@ export class Hud {
       const foes = n === 1 ? '1 foe remains' : `${n} foes remain`;
       if (live.kind === 'boss') {
         this.objective.textContent = `The ${boss ? boss.name : 'Warden'} bars the way`;
-      } else if (live.rule === 'holdout') {
-        // A count of the dead means nothing here — the clock is the objective.
-        this.objective.textContent = `Hold — ${Math.max(0, Math.ceil(live.holdFor))}s`;
-      } else if (live.rule === 'waves') {
-        this.objective.textContent = `Wave ${live.wave} of ${live.waves} — ${foes}`;
-      } else if (live.rule === 'dark') {
-        this.objective.textContent = `Sealed in the dark — ${foes}`;
       } else {
-        this.objective.textContent = `Sealed — ${foes}`;
+        const where = live.waves > 1 ? `Wave ${live.wave} of ${live.waves}` : 'Sealed';
+        this.objective.textContent = live.dark ? `${where}, in the dark — ${foes}` : `${where} — ${foes}`;
       }
     } else {
       this.objective.textContent = game.portalReady === false ? 'The portal is dormant' : 'Descend — find the portal';
