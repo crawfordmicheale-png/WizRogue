@@ -42,8 +42,14 @@ function playRun(archetypeId, seed) {
   let wp = 0;
   let lastPos = { x: 0, y: 0 };
   let stuckFor = 0;
+  // Per-frame immobility is too twitchy a signal: nudging into a corner still
+  // yields millimetres of drift, which resets it. Progress is measured over a
+  // window instead — a bot that has not covered a tile in four seconds is lost.
+  let anchorPos = { x: 0, y: 0 };
+  let anchorTimer = 0;
+  let noProgress = false;
   let strafe = 1;
-  const stats = { depth: 1, kills: 0, casts: 0, stuckEvents: 0, stall: null };
+  const stats = { depth: 1, kills: 0, casts: 0, stuckEvents: 0, reanchors: 0, stall: null };
   let depthSince = 0, lastDepth = 1;
   const trail = [];
 
@@ -118,6 +124,23 @@ function playRun(archetypeId, seed) {
       p.angle = Math.atan2(goal.y - p.y, goal.x - p.x);
       input.held.add('forward');
       if (stuckFor > 0.4) input.held.add(strafe > 0 ? 'right' : 'left');
+
+      // The waypoint index only ever moves forward, so a bot shoved backwards
+      // through a doorway mid-fight keeps aiming at a waypoint that is now
+      // behind a wall and grinds into the corner. Re-anchor to the nearest
+      // waypoint it can actually see in a straight line. Without this the bot
+      // strands itself and reports a soft-lock the game does not have.
+      if (noProgress) {
+        let bi = -1, bd = Infinity;
+        for (let i = 0; i < spine.length; i++) {
+          const c = { x: spine[i].x + 0.5, y: spine[i].y + 0.5 };
+          const d = Math.hypot(c.x - p.x, c.y - p.y);
+          if (d < bd && game.hasLineOfSight(p.x, p.y, c.x, c.y)) { bd = d; bi = i; }
+        }
+        if (bi >= 0) { wp = bi; stats.reanchors++; }
+        strafe = -strafe;
+        noProgress = false;
+      }
     }
 
     game.update(STEP, input);
@@ -145,6 +168,13 @@ function playRun(archetypeId, seed) {
         trail: trail.slice(-20),
       };
       break;
+    }
+
+    // --- progress window ---------------------------------------------------
+    if ((anchorTimer += STEP) > 4) {
+      noProgress = Math.hypot(p.x - anchorPos.x, p.y - anchorPos.y) < 1;
+      anchorPos = { x: p.x, y: p.y };
+      anchorTimer = 0;
     }
 
     // --- stuck detection ---------------------------------------------------

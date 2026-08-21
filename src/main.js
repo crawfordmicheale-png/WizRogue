@@ -203,7 +203,7 @@ class App {
     // A short white-out sells stepping through the portal.
     this.fader.classList.add('on');
     setTimeout(() => {
-      const options = rollRewards(this.game);
+      const options = rollRewards(this.game, this.game.roll);
       const present = () => {
         this.menus.rewards(options, this.game.player, this.game.depth, (choice) => {
           this.game.applyReward(choice);

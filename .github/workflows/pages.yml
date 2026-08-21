@@ -5,7 +5,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [claude/spell-casting-roguelike-eu0kh9, main]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,9 +13,12 @@ permissions:
   pages: write
   id-token: write
 
+# Pages allows one live deployment at a time. Queue them rather than cancelling:
+# a cancelled deploy leaves the published site on the previous commit, and two
+# deploys racing (feature branch + main) is what made this workflow need retries.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:

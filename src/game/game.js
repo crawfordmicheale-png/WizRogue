@@ -3,7 +3,7 @@ import { Player } from './player.js';
 import { Enemy, collides } from './enemies.js';
 import { SPELLS, spellStats, schoolColor } from './spells.js';
 import { getArchetype } from './archetypes.js';
-import { clamp, angleDelta } from '../util/rng.js';
+import { clamp, angleDelta, makeRng } from '../util/rng.js';
 import { PLAYER, biomeForDepth } from '../config.js';
 import { settings } from '../settings.js';
 import { buzz } from '../ui/haptics.js';
@@ -17,13 +17,25 @@ export class Game {
     this.hooks = hooks;
     this.state = 'idle';
     this.time = 0;
+    this.setRunRng(1);
     this.log = [];
   }
 
   // --- run lifecycle ------------------------------------------------------
 
+  // Gameplay randomness (enemy aim, drops, wake-up stagger) runs off the run
+  // seed rather than Math.random, so the same seed always plays out the same
+  // way. That is what lets the headless sim in test/sim.mjs reproduce a
+  // failure instead of hitting it once in every few runs.
+  setRunRng(seed) {
+    const rng = makeRng(seed ^ 0x5f356495);
+    this.rng = rng;
+    this.roll = () => rng.next();
+  }
+
   startRun(archetypeId, seed = (Math.random() * 1e9) | 0) {
     this.seed = seed >>> 0;
+    this.setRunRng(this.seed);
     this.archetype = getArchetype(archetypeId);
     this.player = new Player(this.archetype);
     this.depth = 0;
@@ -40,6 +52,7 @@ export class Game {
   // (levels are deterministic), then lay the saved player state back on top.
   restoreRun(save) {
     this.seed = save.seed >>> 0;
+    this.setRunRng(this.seed);
     this.archetype = getArchetype(save.archetypeId);
     this.player = new Player(this.archetype);
     this.depth = save.depth - 1;
@@ -93,7 +106,7 @@ export class Game {
   }
 
   spawn(typeId, x, y, encounter, elite = null) {
-    const e = new Enemy(typeId, x, y, this.depth, elite);
+    const e = new Enemy(typeId, x, y, this.depth, elite, this.roll);
     e.encounter = encounter;
     this.enemies.push(e);
     return e;
@@ -170,7 +183,7 @@ export class Game {
     enc.triggered = true;
     enc.spawns.forEach((s, i) => {
       const e = this.spawn(s.id, s.x, s.y, enc, s.elite);
-      e.readyIn = i * 0.35 + Math.random() * 0.4;
+      e.readyIn = i * 0.35 + this.roll() * 0.4;
     });
     for (const seal of enc.seals) {
       const b = this.level.barriers.get(`${seal.x},${seal.y}`);
@@ -629,7 +642,7 @@ export class Game {
 
   blinkEnemy(enemy, dx, dy, dist) {
     for (let attempt = 0; attempt < 6; attempt++) {
-      const a = Math.atan2(dy, dx) + (Math.random() - 0.5) * 1.6;
+      const a = Math.atan2(dy, dx) + (this.roll() - 0.5) * 1.6;
       const nx = enemy.x + Math.cos(a) * dist;
       const ny = enemy.y + Math.sin(a) * dist;
       if (collides(this.level, nx, ny, enemy.radius)) continue;
@@ -696,9 +709,9 @@ export class Game {
       this.player.shake = 1;
     }
     // Small chance of a drop so long fights stay sustainable; elites always pay out.
-    if (Math.random() < (enemy.type.boss || enemy.elite ? 1 : 0.16)) {
+    if (this.roll() < (enemy.type.boss || enemy.elite ? 1 : 0.16)) {
       this.level.props.push({
-        kind: Math.random() < 0.5 ? 'health' : 'mana',
+        kind: this.roll() < 0.5 ? 'health' : 'mana',
         x: enemy.x, y: enemy.y, z: 0.35, phase: 0, taken: false,
       });
     }
